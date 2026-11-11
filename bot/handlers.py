@@ -56,8 +56,8 @@ async def cmd_list(message: Message) -> None:
         last = db.get_last_point(p.id)
         first = db.get_first_point(p.id)
         title = (p.title or "⏳ название уточню при следующей проверке")
-        if len(title) > 45:
-            title = title[:45] + "…"
+        if len(title) > 120:
+            title = title[:120] + "…"
         price_str = "—"
         if last:
             eff = effective_price(last.price, last.card_price)
