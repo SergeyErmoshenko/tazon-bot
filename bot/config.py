@@ -28,11 +28,6 @@ DELAY_BETWEEN_PRODUCTS = (2.0, 5.0)  # пауза между товарами, �
 RETRY_DELAY = (5.0, 10.0)         # пауза перед повтором при антиботе, сек
 FAIL_ALERT_THRESHOLD = 5          # подряд нечитаемых прогонов -> алерт админу
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
-
 
 @dataclass
 class Settings:

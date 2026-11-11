@@ -200,8 +200,10 @@ class OzonParser:
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(config.BROWSER_PROFILE_DIR),
             headless=self._headless,
+            # полный Chromium (new headless), а не headless-shell: отпечаток как у
+            # обычного браузера, UA подменять не нужно — он настоящий
+            channel="chromium",
             viewport={"width": 1440, "height": 900},
-            user_agent=config.USER_AGENT,
             locale="ru-RU",
             timezone_id="Europe/Moscow",
             args=[
