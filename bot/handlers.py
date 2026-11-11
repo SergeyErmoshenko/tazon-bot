@@ -24,7 +24,7 @@ HELP_TEXT = (
     "• Кинь ссылку на товар — добавлю в мониторинг и покажу текущую цену\n"
     "• /list — список товаров (кнопка с 📈 пришлёт график)\n"
     "• /check — проверить все прямо сейчас\n"
-    "• /del — удалить товар\n"
+    "• /del — удалить товар (можно сразу со ссылкой: /del https://…)\n"
     "• /help — эта справка\n\n"
     "Проверяю по расписанию, уведомлю при снижении "
     "(обычной цены или цены по Ozon Карте)."
@@ -80,6 +80,23 @@ async def cmd_list(message: Message) -> None:
 
 @router.message(Command("del"))
 async def cmd_del(message: Message) -> None:
+    # /del <ссылка> — удалить по ссылке; /del — показать кнопки
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) > 1 and parts[1].strip():
+        normalized = normalize_url(parts[1].strip())
+        if normalized is None:
+            await message.answer("Это не ссылка на товар Ozon. Пример: /del https://www.ozon.ru/product/…\nИли просто /del — покажу список с кнопками.")
+            return
+        _, sku = normalized
+        product = db.get_by_sku(sku)
+        if not product:
+            await message.answer("Этого товара нет в списке.")
+            return
+        db.delete_product(product.id)
+        title = (product.title or product.url).strip()
+        await message.answer(f"🗑 Удалил:\n{title[:80]}")
+        return
+
     products = db.list_products(active_only=False)
     if not products:
         await message.answer("Удалять нечего — список пуст.")
@@ -182,8 +199,9 @@ async def add_product(message: Message, bot: Bot) -> None:
         eff = effective_price(last.price, last.card_price)
         if eff is not None:
             price_str = f"{eff:,} ₽".replace(",", " ") + (" с Ozon Картой" if last.card_price else "")
+    title = product.title or "(название уточню при следующей проверке)"
     await status.edit_text(
-        f"✅ Добавил в мониторинг:\n{product.title}\nСейчас: {price_str}\n\n"
+        f"✅ Добавил в мониторинг:\n{title}\nСейчас: {price_str}\n\n"
         f"Уведомлю, когда подешевеет. /list — все товары."
     )
 
