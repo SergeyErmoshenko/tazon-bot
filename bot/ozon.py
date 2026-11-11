@@ -355,6 +355,27 @@ class OzonParser:
             return live[0], None
         return None, None
 
+    async def fetch_title(self, url: str) -> str | None:
+        """Отдельная попытка достать только название.
+
+        Вызывается при добавлении товара, если основной прогон не дождался
+        заголовка: свежая навигация по карточке почти всегда его отдаёт.
+        """
+        async with self._lock:
+            try:
+                page = await self._new_page()
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+                    return await self._product_title(page)
+                finally:
+                    try:
+                        await page.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception as exc:  # noqa: BLE001
+                log.warning("fetch_title(%s): %r", url, exc)
+                return None
+
     async def _product_title(self, page) -> str | None:
         # заголовок может отрисоваться позже цен (ленивая загрузка) — ждём до 12 с
         deadline = time.monotonic() + 12

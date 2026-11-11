@@ -13,7 +13,7 @@ from . import config, db
 from .charts import make_chart
 from .notifier import effective_price
 from .ozon import normalize_url
-from .runner import check_product, run_check_all
+from .runner import check_product, get_parser, run_check_all
 
 log = logging.getLogger(__name__)
 
@@ -200,6 +200,13 @@ async def add_product(message: Message, bot: Bot) -> None:
         return
 
     product = db.get_product(product.id) or product  # check_product мог записать title
+    if not product.title:
+        # гарантируем название сразу при добавлении: отдельная попытка,
+        # если основной прогон не дождался заголовка
+        title = await get_parser().fetch_title(url)
+        if title:
+            db.update_title(product.id, title)
+            product = db.get_product(product.id) or product
     last = db.get_last_point(product.id)
     price_str = "цена не отображается"
     if last:
