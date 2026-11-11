@@ -1,13 +1,15 @@
-"""Получение цен с карточки товара Ozon через реальный браузер (Playwright).
+"""Получение цен с карточки товара Ozon.
 
-Устроено в два слоя:
-- чистые функции (normalize_url / parse_price_block / extract_prices_from_html /
-  looks_like_block) — работают по строке, тестируются оффлайн на фикстурах;
-- OzonParser — браузерная обвязка: persistent-профиль (куки антибота живут между
-  прогонами), stealth-маскировка, последовательный обход с задержками и ретраями.
+Схема, которая проходит антибот Ozon (fab_chlg): Chrome запускается как
+ОБЫЧНЫЙ процесс (минимум флагов — только порт отладки и профиль), а Playwright
+подключается к нему по CDP (connect_over_cdp). Chrome, запущенный самим
+Playwright'ом, несёт ~20 служебных флагов и детектится антиботом.
 
-Все знания о вёрстке Ozon сосредоточены здесь: если цены перестали читаться —
-чинить селекторы PRICE_SELECTORS и паттерны PRICE_JSON_PATTERNS в этом файле.
+Ответ 403 с title «Antibot Challenge Page» при этом НЕ означает блок:
+челлендж проходится молча и страница рендерит цены. Блок констатируем
+только если цены нет после ожидания.
+
+Все знания о вёрстке Ozon — в PRICE_SELECTORS, *_LABEL и parse_price_block.
 """
 from __future__ import annotations
 
@@ -15,6 +17,10 @@ import asyncio
 import logging
 import random
 import re
+import subprocess
+import sys
+import time
+import urllib.request
 from dataclasses import dataclass
 
 from . import config
@@ -31,7 +37,7 @@ _PRODUCT_URL_RE = re.compile(
 _SKU_RE = re.compile(r"(\d{5,})\s*/?\s*$")
 
 # Число с разделителями разрядов (пробел, узкий пробел, nbsp) и знаком рубля
-_PRICE_IN_TEXT_RE = re.compile(r"(\d[\d   \s]{0,15})\s*₽")
+_PRICE_IN_TEXT_RE = re.compile(r"(\d[\d   \s]{0,15})\s*₽")
 
 # Блоки DOM, где живёт цена (в порядке приоритета)
 PRICE_SELECTORS = [
@@ -40,7 +46,7 @@ PRICE_SELECTORS = [
     "[data-widget='price']",
 ]
 
-# Fallback: JSON, вшитый в страницу. Порядок = приоритет.
+# Fallback: JSON, вшитый в страницу
 PRICE_JSON_PATTERNS = [
     (re.compile(r'"cardPrice"\s*:\s*"?(\d{3,})'), "card"),
     (re.compile(r'"price"\s*:\s*\{[^{}]*?"price"\s*:\s*"?(\d{3,})'), "price"),
@@ -48,18 +54,13 @@ PRICE_JSON_PATTERNS = [
     (re.compile(r'"price"\s*:\s*"?(\d{3,})'), "price"),
 ]
 
-# Признаки страницы-блока (антибот / ограничение доступа).
-# Слабые маркеры проверяем только в <title> (в теле страницы слово "antibot"
-# может встретиться в скриптах нормальной карточки).
+# Признаки страницы-блока (антибот / ограничение доступа)
 TITLE_BLOCK_MARKERS = ("antibot", "доступ ограничен", "доступ заблокирован", "just a moment")
 BODY_BLOCK_MARKERS = ("antibot challenge", "доступ ограничен", "доступ заблокирован", "just a moment")
 
 
 def normalize_url(raw: str) -> tuple[str, int] | None:
-    """Из любой ссылки/текста с ozon.ru/product/... -> (канонический url, sku).
-
-    Возвращает None, если это не ссылка на карточку товара или sku не найден.
-    """
+    """Из любой ссылки/текста с ozon.ru/product/... -> (канонический url, sku)."""
     m = _PRODUCT_URL_RE.search(raw)
     if not m:
         return None
@@ -72,56 +73,25 @@ def normalize_url(raw: str) -> tuple[str, int] | None:
 
 
 def _to_int(number: str) -> int:
-    return int(re.sub(r"[   \s]", "", number))
-
-
-def _nearest_before(prices: list[tuple[int, int]], pos: int) -> int | None:
-    """Цена, стоящая в тексте непосредственно перед позицией pos (или None)."""
-    before = [p for at, p in prices if at < pos]
-    return before[-1] if before else None
-
-
-def _nearest_after(prices: list[tuple[int, int]], pos: int) -> int | None:
-    """Первая цена, стоящая после позиции pos (или None)."""
-    after = [p for at, p in prices if at > pos]
-    return after[0] if after else None
+    return int(re.sub(r"[   \s]", "", number))
 
 
 def parse_price_block(text: str) -> tuple[int | None, int | None]:
-    """Разобрать текст блока цены (innerText виджета webPrice).
+    """Фолбэк-разбор текста блока цены, когда DOM-анализ недоступен.
 
-    Типичные варианты (подписи идут ПОСЛЕ своей цены):
-      "1 949 ₽"                                  -> (1949, None)
-      "1 749 ₽\\n1 949 ₽ без Ozon Карты"         -> (1949, 1749)
-      "1 749 ₽ с Ozon Картой\\n1 949 ₽"          -> (1949, 1749)
+    Текст не отличает зачёркнутую старую цену от текущей, поэтому честно
+    гарантируем только одно: card = МИНИМАЛЬНАЯ цена (та, за которой владелец
+    следит), plain = максимальная (ориентировочно).
 
-    Возвращает (обычная цена, цена по Ozon Карте).
+    Возвращает (обычная цена, скидочная/карточная).
     """
-    prices = [(m.start(), _to_int(m.group(1))) for m in _PRICE_IN_TEXT_RE.finditer(text)]
-    prices = [(pos, p) for pos, p in prices if p >= 10]  # отсечь мусорные числа
+    prices = [_to_int(m.group(1)) for m in _PRICE_IN_TEXT_RE.finditer(text)]
+    prices = [p for p in prices if p >= 10]
     if not prices:
         return None, None
-
-    lower = text.lower()
-    without_idx = lower.find("без ozon карт")
-    with_idx = lower.find("с ozon карт")
-
-    plain: int | None = None
-    card: int | None = None
-
-    if without_idx != -1:
-        # "... CARD ₽ ... PLAIN ₽ без Ozon Карты" — подпись при обычной цене
-        plain = _nearest_before(prices, without_idx)
-        plain_pos = next((at for at, p in prices if p == plain and at < without_idx), -1)
-        card = _nearest_before(prices, plain_pos) if plain_pos > 0 else None
-    elif with_idx != -1:
-        # "... CARD ₽ с Ozon Картой ... PLAIN ₽"
-        card = _nearest_before(prices, with_idx)
-        plain = _nearest_after(prices, with_idx)
-    else:
-        plain = prices[0][1]
-
-    return plain, card
+    if len(prices) == 1:
+        return prices[0], None
+    return max(prices), min(prices)
 
 
 def extract_prices_from_html(html: str) -> tuple[int | None, int | None]:
@@ -144,10 +114,8 @@ def extract_prices_from_html(html: str) -> tuple[int | None, int | None]:
     return price, card
 
 
-def looks_like_block(status: int | None, title: str, html: str) -> bool:
-    """Похоже ли на страницу антибот-блока, а не на карточку товара."""
-    if status == 403:
-        return True
+def looks_like_block(title: str, html: str) -> bool:
+    """Похоже ли на страницу-блок (вызывается уже ПОСЛЕ того, как цены нет)."""
     title_lower = (title or "").lower()
     if any(marker in title_lower for marker in TITLE_BLOCK_MARKERS):
         return True
@@ -155,16 +123,39 @@ def looks_like_block(status: int | None, title: str, html: str) -> bool:
     return any(marker in body_head for marker in BODY_BLOCK_MARKERS)
 
 
-# ---------------------------------------------------------------------------
-# Браузерная обвязка
-# ---------------------------------------------------------------------------
-
-_STEALTH_JS = """
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-window.chrome = window.chrome || { runtime: {} };
-Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en'] });
+# JS в контексте страницы: все цены блока с признаком «зачёркнута».
+# Зачёркнутая — старая цена, её игнорируем; из живых: min = карточная,
+# max = обычная.
+_PRICE_DOM_JS = """
+(sel) => {
+  const root = document.querySelector(sel);
+  if (!root) return null;
+  const out = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const t = node.textContent || '';
+    const m = t.match(/(\\d[\\d\\u00a0\\u202f\\u2009\\s]{0,15})\\s*₽/);
+    if (!m) continue;
+    let el = node.parentElement;
+    let struck = false;
+    while (el && el !== root.parentElement) {
+      const cs = getComputedStyle(el);
+      const td = cs.textDecorationLine || cs.textDecoration || '';
+      if (String(td).includes('line-through')) { struck = true; break; }
+      el = el.parentElement;
+    }
+    const value = parseInt(m[1].replace(/\\D/g, ''), 10);
+    if (value >= 10) out.push({ value: value, struck: struck });
+  }
+  return out.length ? out : null;
+}
 """
+
+
+# ---------------------------------------------------------------------------
+# Браузер: обычный Chrome + Playwright over CDP
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -173,7 +164,7 @@ class FetchResult:
     price: int | None = None
     card_price: int | None = None
     title: str | None = None
-    blocked: bool = False          # антибот не пустил
+    blocked: bool = False          # антибот не пустил (цен нет)
     error: str | None = None       # прочая ошибка (таймаут и т.п.)
 
     @property
@@ -181,14 +172,23 @@ class FetchResult:
         return not self.blocked and not self.error and (self.price is not None or self.card_price is not None)
 
 
-class OzonParser:
-    """Общий браузерный контекст на все прогоны; страницы открываются на каждый товар."""
+def _cdp_alive(port: int) -> bool:
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2)
+        return True
+    except Exception:
+        return False
 
-    def __init__(self, headless: bool = config.DEFAULT_HEADLESS) -> None:
-        self._headless = headless
+
+class OzonParser:
+    """Chrome запускается субпроцессом и живёт между прогонами; Playwright — сбоку."""
+
+    def __init__(self) -> None:
         self._playwright = None
+        self._browser = None
         self._context = None
-        self._lock = asyncio.Lock()  # один товар в один момент времени
+        self._proc: subprocess.Popen | None = None
+        self._lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._context is not None:
@@ -196,47 +196,60 @@ class OzonParser:
         from playwright.async_api import async_playwright
 
         config.BROWSER_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        port = config.CDP_PORT
+
+        if not _cdp_alive(port):
+            log.info("Запускаю Chrome: %s (profile=%s)", config.CHROME_PATH, config.BROWSER_PROFILE_DIR)
+            creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            self._proc = subprocess.Popen(
+                [
+                    config.CHROME_PATH,
+                    f"--remote-debugging-port={port}",
+                    f"--user-data-dir={config.BROWSER_PROFILE_DIR}",
+                    "--start-minimized",
+                    "about:blank",
+                ],
+                creationflags=creationflags,
+            )
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if _cdp_alive(port):
+                    break
+                if self._proc.poll() is not None:
+                    raise RuntimeError(f"Chrome умер при старте, код {self._proc.returncode}")
+                await asyncio.sleep(0.5)
+            else:
+                raise RuntimeError("CDP-порт Chrome не поднялся за 30 с")
+
         self._playwright = await async_playwright().start()
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(config.BROWSER_PROFILE_DIR),
-            headless=self._headless,
-            # полный Chromium (new headless), а не headless-shell: отпечаток как у
-            # обычного браузера, UA подменять не нужно — он настоящий
-            channel="chromium",
-            viewport={"width": 1440, "height": 900},
-            locale="ru-RU",
-            timezone_id="Europe/Moscow",
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-infobars",
-            ],
-        )
-        await self._context.add_init_script(_STEALTH_JS)
-        log.info("Браузер запущен (headless=%s, profile=%s)", self._headless, config.BROWSER_PROFILE_DIR)
+        self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+        log.info("Подключён к Chrome по CDP (порт %d)", port)
 
     async def close(self) -> None:
-        if self._context is not None:
+        for obj, name in ((self._browser, "browser"), (self._playwright, "playwright")):
+            if obj is not None:
+                try:
+                    await obj.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        self._browser = None
+        self._context = None
+        self._playwright = None
+        if self._proc is not None:
             try:
-                await self._context.close()
-            except Exception:  # noqa: BLE001 — закрытие не должно падать
-                pass
-            self._context = None
-        if self._playwright is not None:
-            try:
-                await self._playwright.stop()
+                self._proc.terminate()
             except Exception:  # noqa: BLE001
                 pass
-            self._playwright = None
+            self._proc = None
 
     async def _restart(self) -> None:
-        log.warning("Перезапуск браузерного контекста")
+        log.warning("Перезапуск Chrome/CDP")
         await self.close()
         await self.start()
 
     async def fetch_prices(self, url: str) -> FetchResult:
-        """Открыть карточку и снять цены. До MAX_RETRIES попыток при антибот-блоке."""
+        """Открыть карточку и снять цены. До MAX_RETRIES попыток."""
         async with self._lock:
             last: FetchResult | None = None
             for attempt in range(1, config.MAX_RETRIES + 1):
@@ -248,61 +261,96 @@ class OzonParser:
                     try:
                         await self._restart()
                     except Exception as restart_exc:  # браузер вообще не поднимается
-                        log.error("Браузер не перезапускается: %r", restart_exc)
-                        return FetchResult(url=url, error=f"browser not starting: {restart_exc}")
-                if last is not None and not (last.blocked or last.error):
+                        log.error("Chrome не перезапускается: %r", restart_exc)
+                        return FetchResult(url=url, error=f"chrome not starting: {restart_exc}")
+                if last is not None and last.ok:
                     return last
                 if attempt < config.MAX_RETRIES:
                     await asyncio.sleep(random.uniform(*config.RETRY_DELAY))
             return last or FetchResult(url=url, error="no attempts")
 
-    async def _fetch_once(self, url: str) -> FetchResult:
+    async def _new_page(self):
         await self.start()
         assert self._context is not None
         page = await self._context.new_page()
         page.set_default_timeout(config.PRICE_TIMEOUT_MS)
-        try:
-            response = await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
-            status = response.status if response else None
-            title_tag = await page.title()
+        return page
 
+    async def _fetch_once(self, url: str) -> FetchResult:
+        page = await self._new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+
+            # Статус/титул могут быть от челленджа, но страница рендерится:
+            # сначала ждём ЦЕНУ, и только её отсутствие считаем блоком.
+            plain = card = None
+            deadline = time.monotonic() + config.CHALLENGE_WAIT_S
+            while time.monotonic() < deadline and plain is None and card is None:
+                plain, card = await self._extract_dom_prices(page)
+                if plain is None and card is None:
+                    await asyncio.sleep(1.0)
+
+            if plain is None and card is None:
+                # запасной путь: цены из JSON, вшитого в страницу
+                try:
+                    html = await page.content()
+                    plain, card = extract_prices_from_html(html)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if plain is not None or card is not None:
+                return FetchResult(url=url, price=plain, card_price=card, title=await self._product_title(page))
+
+            title = await page.title()
             html = ""
             try:
                 html = await page.content()
-            except Exception:  # noqa: BLE001 — контент может не дочитаться
+            except Exception:  # noqa: BLE001
                 pass
-
-            if looks_like_block(status, title_tag, html):
-                log.warning("Антибот-блок (status=%s, title=%r): %s", status, title_tag, url)
+            if looks_like_block(title, html):
+                log.warning("Антибот-блок (title=%r): %s", title, url)
                 return FetchResult(url=url, blocked=True)
-
-            # основной путь: DOM-виджет цены
-            price_text: str | None = None
-            for selector in PRICE_SELECTORS:
-                try:
-                    loc = page.locator(selector).first
-                    price_text = await loc.text_content()
-                    if price_text and "₽" in price_text:
-                        break
-                    price_text = None
-                except Exception:  # noqa: BLE001 — селектор не нашёлся
-                    continue
-
-            plain = card = None
-            if price_text:
-                plain, card = parse_price_block(price_text)
-
-            if plain is None and card is None:
-                await asyncio.sleep(random.uniform(1.5, 3.0))
-                html = await page.content()
-                plain, card = extract_prices_from_html(html)
-
-            h1 = await page.query_selector("h1")
-            title = (await h1.text_content()).strip() if h1 else title_tag
-
-            return FetchResult(url=url, price=plain, card_price=card, title=title or None)
+            return FetchResult(url=url, error="цена не найдена на странице")
         finally:
             try:
                 await page.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    async def _extract_dom_prices(self, page) -> tuple[int | None, int | None]:
+        """Цены из DOM с учётом зачёркивания: (обычная, карточная=минимальная).
+
+        Возвращает (None, None), если виджет ещё не отрендерился — вызывающий
+        код будет поллить.
+        """
+        for selector in PRICE_SELECTORS:
+            try:
+                data = await page.evaluate(_PRICE_DOM_JS, selector)
+            except Exception:  # noqa: BLE001 — селектор/страница не готовы
+                continue
+            if not data:
+                continue
+            live = [d["value"] for d in data if not d["struck"]]
+            if not live:
+                continue
+            if len(live) == 1:
+                return live[0], None
+            return max(live), min(live)
+        return None, None
+
+    async def _product_title(self, page) -> str | None:
+        try:
+            h1 = await page.query_selector("h1")
+            if h1:
+                text = (await h1.text_content() or "").strip()
+                if text:
+                    return text
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            title = (await page.title() or "").strip()
+            if title and not any(m in title.lower() for m in TITLE_BLOCK_MARKERS):
+                return title
+        except Exception:  # noqa: BLE001
+            pass
+        return None

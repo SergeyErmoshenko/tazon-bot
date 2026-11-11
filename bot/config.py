@@ -18,11 +18,19 @@ BROWSER_PROFILE_DIR = DATA_DIR / "browser-profile"
 
 DEFAULT_CHECK_TIMES = "08:00,14:00,20:00,02:00"
 DEFAULT_JITTER_MINUTES = 15
-DEFAULT_HEADLESS = True
+
+# Chrome запускается отдельным процессом, Playwright подключается по CDP —
+# так браузер не несёт флагов автоматизации и проходит антибот Ozon.
+CHROME_PATH = os.getenv(
+    "CHROME_PATH",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+)
+CDP_PORT = int(os.getenv("CDP_PORT", "9222"))
 
 # --- Парсер: задержки и ретраи ---
 PAGE_TIMEOUT_MS = 30_000          # навигация по карточке
 PRICE_TIMEOUT_MS = 15_000         # ожидание виджета цены на загруженной странице
+CHALLENGE_WAIT_S = 20             # сколько ждать самопрохождения JS-челленджа Ozon
 MAX_RETRIES = 3                   # попыток на товар за прогон
 DELAY_BETWEEN_PRODUCTS = (2.0, 5.0)  # пауза между товарами, сек (random)
 RETRY_DELAY = (5.0, 10.0)         # пауза перед повтором при антиботе, сек
@@ -35,7 +43,6 @@ class Settings:
     admin_chat_id: int
     check_times: list[tuple[int, int]] = field(default_factory=list)
     jitter_minutes: int = DEFAULT_JITTER_MINUTES
-    headless: bool = DEFAULT_HEADLESS
 
 
 # Устанавливается один раз в main.py при старте; остальной код берёт отсюда.
@@ -78,5 +85,4 @@ def load_settings() -> Settings:
         admin_chat_id=int(admin_raw),
         check_times=_parse_check_times(os.getenv("CHECK_TIMES", DEFAULT_CHECK_TIMES)),
         jitter_minutes=int(os.getenv("JITTER_MINUTES", str(DEFAULT_JITTER_MINUTES))),
-        headless=os.getenv("HEADLESS", str(DEFAULT_HEADLESS)).strip().lower() not in ("0", "false", "no"),
     )

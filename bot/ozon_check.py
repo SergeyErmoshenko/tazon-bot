@@ -1,8 +1,8 @@
-"""Диагностика парсера на живой карточке: python -m bot.ozon_check <url> [--show]
+"""Диагностика парсера на живой карточке: python -m bot.ozon_check <url>
 
 Печатает, что удалось извлечь (цены, title, признаки антибота) — удобно,
 чтобы проверить селекторы на реальной странице без запуска бота.
---show открывает окно браузера (headless=False).
+Chrome запускается свёрнутым окном.
 """
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ async def main(argv: list[str]) -> int:
         print(__doc__)
         return 0
     raw_url = argv[0]
-    show = "--show" in argv[1:]
 
     normalized = normalize_url(raw_url)
     if normalized is None:
@@ -26,7 +25,7 @@ async def main(argv: list[str]) -> int:
     url, sku = normalized
     print(f"URL: {url}\nSKU: {sku}\n")
 
-    parser = OzonParser(headless=not show)
+    parser = OzonParser()
     try:
         result = await parser.fetch_prices(url)
     finally:

@@ -39,8 +39,7 @@ async def main() -> None:
 
     db.init_db()
     log = logging.getLogger("main")
-    log.info("Старт: chat_id=%s, проверки=%s, headless=%s",
-             settings.admin_chat_id, settings.check_times, settings.headless)
+    log.info("Старт: chat_id=%s, проверки=%s", settings.admin_chat_id, settings.check_times)
 
     bot = Bot(
         token=settings.bot_token,

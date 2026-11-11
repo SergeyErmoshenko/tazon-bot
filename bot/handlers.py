@@ -11,6 +11,7 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
 
 from . import config, db
 from .charts import make_chart
+from .notifier import effective_price
 from .ozon import normalize_url
 from .runner import check_product, run_check_all
 
@@ -58,13 +59,10 @@ async def cmd_list(message: Message) -> None:
         if len(title) > 45:
             title = title[:45] + "…"
         price_str = "—"
-        if last and (last.price or last.card_price):
-            parts = []
-            if last.card_price:
-                parts.append(f"{last.card_price:,} ₽ по карте".replace(",", " "))
-            if last.price:
-                parts.append(f"{last.price:,} ₽".replace(",", " "))
-            price_str = " / ".join(parts)
+        if last:
+            eff = effective_price(last.price, last.card_price)
+            if eff is not None:
+                price_str = f"{eff:,} ₽".replace(",", " ") + (" с картой" if last.card_price else "")
         delta = ""
         if last and first and last.price and first.price and last.price != first.price:
             d = last.price - first.price
@@ -180,13 +178,10 @@ async def add_product(message: Message, bot: Bot) -> None:
     product = db.get_product(product.id) or product  # check_product мог записать title
     last = db.get_last_point(product.id)
     price_str = "цена не отображается"
-    if last and (last.price or last.card_price):
-        parts = []
-        if last.card_price:
-            parts.append(f"{last.card_price:,} ₽ по Ozon Карте".replace(",", " "))
-        if last.price:
-            parts.append(f"{last.price:,} ₽".replace(",", " "))
-        price_str = " / ".join(parts)
+    if last:
+        eff = effective_price(last.price, last.card_price)
+        if eff is not None:
+            price_str = f"{eff:,} ₽".replace(",", " ") + (" с Ozon Картой" if last.card_price else "")
     await status.edit_text(
         f"✅ Добавил в мониторинг:\n{product.title}\nСейчас: {price_str}\n\n"
         f"Уведомлю, когда подешевеет. /list — все товары."

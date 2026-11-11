@@ -35,18 +35,14 @@ def test_normalize_url_rejects_slug_without_sku():
     assert normalize_url("https://www.ozon.ru/product/chto-to-strannoe/") is None
 
 
-# --- parse_price_block -----------------------------------------------------
+# --- parse_price_block (текстовый фолбэк: min/max) --------------------------
 
 def test_price_block_plain_only():
     assert parse_price_block("1 949 ₽") == (1949, None)
 
 
-def test_price_block_plain_with_thin_space():
-    assert parse_price_block("1 949 ₽") == (1949, None)
-
-
 def test_price_block_card_then_without_label():
-    # типичная карточка: крупная карточная цена + строка «без Ozon Карты»
+    # card = min, plain = max; зачёркнутую старую текст не различает
     text = "1 749 ₽\n1 949 ₽ без Ozon Карты"
     assert parse_price_block(text) == (1949, 1749)
 
@@ -56,9 +52,9 @@ def test_price_block_card_label_between():
     assert parse_price_block(text) == (1949, 1749)
 
 
-def test_price_block_card_only_with_label():
+def test_price_block_card_only_single():
     text = "1 749 ₽ с Ozon Картой"
-    assert parse_price_block(text) == (None, 1749)
+    assert parse_price_block(text) == (1749, None)
 
 
 def test_price_block_no_prices():
@@ -67,6 +63,19 @@ def test_price_block_no_prices():
 
 def test_price_block_big_numbers():
     assert parse_price_block("129 900 ₽\n149 900 ₽ без Ozon Карты") == (149900, 129900)
+
+
+def test_price_block_banks_format_2026():
+    # реальная разметка 2026: 21 098 (с банками) / 22 691 / 32 438 (зачёркнута).
+    # Фолбэк не видит зачёркивание: plain=max, card=min; отслеживаемая
+    # (минимальная) цена = 21 098 — верно.
+    text = " 21 098 ₽  С банками      22 691 ₽  32 438 ₽  С другими банками"
+    assert parse_price_block(text) == (32438, 21098)
+
+
+def test_price_block_banks_format_no_card():
+    text = "22 691 ₽  32 438 ₽  С другими банками"
+    assert parse_price_block(text) == (32438, 22691)
 
 
 # --- extract_prices_from_html (fallback) -----------------------------------
@@ -92,17 +101,13 @@ def test_extract_from_json_nothing():
 
 # --- looks_like_block ------------------------------------------------------
 
-def test_block_by_status_403():
-    assert looks_like_block(403, "", "<html></html>") is True
-
-
 def test_block_by_title_antibot():
-    assert looks_like_block(200, "Antibot Challenge Page", "<html></html>") is True
+    assert looks_like_block("Antibot Challenge Page", "<html></html>") is True
 
 
 def test_block_by_russian_marker():
-    assert looks_like_block(200, "Ozon", "доступ ограничен, подождите") is True
+    assert looks_like_block("Ozon", "доступ ограничен, подождите") is True
 
 
 def test_not_block_normal_page():
-    assert looks_like_block(200, "Смартфон — Ozon", "<html>обычная карточка</html>") is False
+    assert looks_like_block("Смартфон — Ozon", "<html>обычная карточка</html>") is False
