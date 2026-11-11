@@ -16,7 +16,7 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 DB_PATH = DATA_DIR / "monitor.db"
 BROWSER_PROFILE_DIR = DATA_DIR / "browser-profile"
 
-DEFAULT_CHECK_TIMES = "08:00,14:00,20:00,02:00"
+DEFAULT_CHECK_TIMES = "00:00,03:00,06:00,09:00,12:00,15:00,18:00,21:00"
 DEFAULT_JITTER_MINUTES = 15
 
 # Chrome запускается отдельным процессом, Playwright подключается по CDP —

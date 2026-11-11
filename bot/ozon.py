@@ -356,8 +356,8 @@ class OzonParser:
         return None, None
 
     async def _product_title(self, page) -> str | None:
-        # заголовок может отрисоваться позже цен (ленивая загрузка) — чуть подождём
-        deadline = time.monotonic() + 5
+        # заголовок может отрисоваться позже цен (ленивая загрузка) — ждём до 12 с
+        deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             try:
                 h1 = await page.query_selector("h1")
