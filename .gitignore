@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/
+logs/
+*.png
+.pytest_cache/
+.pw-browsers/
+.tclaude-docker.status
