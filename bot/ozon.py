@@ -80,9 +80,8 @@ def parse_price_block(text: str) -> tuple[int | None, int | None]:
     """Фолбэк-разбор текста блока цены, когда DOM-анализ недоступен.
 
     Цены «за 1 шт / за 1 уп / за 100 г…» (цена единицы, не товара) skip'аются.
-    Текст не отличает зачёркнутую старую цену от текущей, поэтому честно
-    гарантируем только одно: card = МИНИМАЛЬНАЯ цена (та, за которой владелец
-    следит), plain = максимальная (ориентировочно).
+    Дальше — по порядку (порядок в блоке стабилен: карточная, обычная, старая):
+    две цены и вторая больше -> (обычная, карточная); иначе первая -> обычная.
 
     Возвращает (обычная цена, скидочная/карточная).
     """
@@ -97,7 +96,9 @@ def parse_price_block(text: str) -> tuple[int | None, int | None]:
         return None, None
     if len(prices) == 1:
         return prices[0], None
-    return max(prices), min(prices)
+    if prices[1] > prices[0]:
+        return prices[1], prices[0]
+    return prices[0], None
 
 
 def extract_prices_from_html(html: str) -> tuple[int | None, int | None]:
@@ -327,7 +328,12 @@ class OzonParser:
                 pass
 
     async def _extract_dom_prices(self, page) -> tuple[int | None, int | None]:
-        """Цены из DOM с учётом зачёркивания: (обычная, карточная=минимальная).
+        """Цены из DOM: (обычная, карточная).
+
+        Порядок цен в виджете стабилен: [карточная «С банками», обычная,
+        старая зачёркнутая, «за 1 шт»…]. Детект зачёркивания у Ozon ненадёжен
+        (линия рисуется не text-decoration), поэтому доверяем ПОРЯДКУ:
+        две цены и вторая больше -> (обычная, карточная); остальное игнорируем.
 
         Возвращает (None, None), если виджет ещё не отрендерился — вызывающий
         код будет поллить.
@@ -344,7 +350,9 @@ class OzonParser:
                 continue
             if len(live) == 1:
                 return live[0], None
-            return max(live), min(live)
+            if live[1] > live[0]:
+                return live[1], live[0]
+            return live[0], None
         return None, None
 
     async def _product_title(self, page) -> str | None:
