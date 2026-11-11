@@ -348,14 +348,18 @@ class OzonParser:
         return None, None
 
     async def _product_title(self, page) -> str | None:
-        try:
-            h1 = await page.query_selector("h1")
-            if h1:
-                text = (await h1.text_content() or "").strip()
-                if text:
-                    return text
-        except Exception:  # noqa: BLE001
-            pass
+        # заголовок может отрисоваться позже цен (ленивая загрузка) — чуть подождём
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                h1 = await page.query_selector("h1")
+                if h1:
+                    text = (await h1.text_content() or "").strip()
+                    if text:
+                        return text
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(1.0)
         try:
             title = (await page.title() or "").strip()
             if title and not any(m in title.lower() for m in TITLE_BLOCK_MARKERS):

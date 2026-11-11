@@ -93,19 +93,26 @@ async def cmd_del(message: Message) -> None:
             await message.answer("Этого товара нет в списке.")
             return
         db.delete_product(product.id)
-        title = (product.title or product.url).strip()
-        await message.answer(f"🗑 Удалил:\n{title[:80]}")
+        title = (product.title or "(без названия)").strip()
+        await message.answer(f"🗑 Удалил:\n{title}\n{product.url}", disable_web_page_preview=True)
         return
 
     products = db.list_products(active_only=False)
     if not products:
         await message.answer("Удалять нечего — список пуст.")
         return
-    buttons = [
-        [InlineKeyboardButton(text=(p.title or str(p.url))[:60], callback_data=f"del:{p.id}")]
-        for p in products
-    ]
-    await message.answer("Что удалить?", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    lines: list[str] = []
+    buttons: list[list[InlineKeyboardButton]] = []
+    for i, p in enumerate(products, 1):
+        title = (p.title or "(название уточню при следующей проверке)").strip()
+        lines.append(f"{i}. {title}\n   {p.url}")
+        short = title if len(title) <= 50 else title[:50] + "…"
+        buttons.append([InlineKeyboardButton(text=f"🗑 {i}. {short}", callback_data=f"del:{p.id}")])
+    await message.answer(
+        "Что удалить?\n\n" + "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        disable_web_page_preview=True,
+    )
 
 
 @router.message(Command("check"))
