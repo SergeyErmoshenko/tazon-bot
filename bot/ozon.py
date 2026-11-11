@@ -79,13 +79,19 @@ def _to_int(number: str) -> int:
 def parse_price_block(text: str) -> tuple[int | None, int | None]:
     """Фолбэк-разбор текста блока цены, когда DOM-анализ недоступен.
 
+    Цены «за 1 шт / за 1 уп / за 100 г…» (цена единицы, не товара) skip'аются.
     Текст не отличает зачёркнутую старую цену от текущей, поэтому честно
     гарантируем только одно: card = МИНИМАЛЬНАЯ цена (та, за которой владелец
     следит), plain = максимальная (ориентировочно).
 
     Возвращает (обычная цена, скидочная/карточная).
     """
-    prices = [_to_int(m.group(1)) for m in _PRICE_IN_TEXT_RE.finditer(text)]
+    prices = []
+    for m in _PRICE_IN_TEXT_RE.finditer(text):
+        tail = text[m.end():]
+        if re.match(r"\s*за\s", tail):
+            continue  # «638 ₽ за 1 шт» — цена за единицу, не цена товара
+        prices.append(_to_int(m.group(1)))
     prices = [p for p in prices if p >= 10]
     if not prices:
         return None, None
@@ -123,8 +129,9 @@ def looks_like_block(title: str, html: str) -> bool:
     return any(marker in body_head for marker in BODY_BLOCK_MARKERS)
 
 
-# JS в контексте страницы: все цены блока с признаком «зачёркнута».
-# Зачёркнутая — старая цена, её игнорируем; из живых: min = карточная,
+# JS в контексте страницы: все цены блока с признаками «зачёркнута» и
+# «цена за единицу» (за 1 шт / за 1 уп / за 100 г …). Зачёркнутая — старая
+# цена, за единицу — не цена товара; обе игнорируем. Из живых: min = карточная,
 # max = обычная.
 _PRICE_DOM_JS = """
 (sel) => {
@@ -137,6 +144,8 @@ _PRICE_DOM_JS = """
     const t = node.textContent || '';
     const m = t.match(/(\\d[\\d\\u00a0\\u202f\\u2009\\s]{0,15})\\s*₽/);
     if (!m) continue;
+    const parentText = (node.parentElement && node.parentElement.textContent) || '';
+    const isUnit = /₽\\s*за\\s|за\\s+\\d+[\\s.,]*\\d*\\s*(шт|упак|уп|кг|г|гр|мл|л|м|см|пар)/i.test(parentText);
     let el = node.parentElement;
     let struck = false;
     while (el && el !== root.parentElement) {
@@ -146,7 +155,7 @@ _PRICE_DOM_JS = """
       el = el.parentElement;
     }
     const value = parseInt(m[1].replace(/\\D/g, ''), 10);
-    if (value >= 10) out.push({ value: value, struck: struck });
+    if (value >= 10 && !isUnit) out.push({ value: value, struck: struck });
   }
   return out.length ? out : null;
 }

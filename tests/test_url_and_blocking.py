@@ -78,6 +78,14 @@ def test_price_block_banks_format_no_card():
     assert parse_price_block(text) == (32438, 22691)
 
 
+def test_price_block_skips_unit_price():
+    # реальный кейс зубной щётки (набор): «638 ₽ за 1 шт» — не цена товара
+    text = "1 276 ₽  С банками  1 418 ₽  8 888 ₽  С другими банками  638 ₽ за 1 шт"
+    plain, card = parse_price_block(text)
+    assert card == 1276      # отслеживаемая минимальная — «С банками»
+    assert plain == 8888     # фолбэк не видит зачёркивание, но card верен
+
+
 # --- extract_prices_from_html (fallback) -----------------------------------
 
 def test_extract_from_json_card_and_price():
