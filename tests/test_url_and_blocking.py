@@ -35,6 +35,24 @@ def test_normalize_url_rejects_slug_without_sku():
     assert normalize_url("https://www.ozon.ru/product/chto-to-strannoe/") is None
 
 
+def test_normalize_url_plain_sku_short():
+    # «короткая» карточка без слага
+    assert normalize_url("https://www.ozon.ru/product/5551234567/") == ("https://www.ozon.ru/product/5551234567/", 5551234567)
+
+
+def test_normalize_url_old_context_detail():
+    assert normalize_url("https://www.ozon.ru/context/detail/id/5677610222/") == ("https://www.ozon.ru/product/5677610222/", 5677610222)
+
+
+def test_normalize_url_ozone_domain():
+    assert normalize_url("https://ozone.ru/product/1234567890/") == ("https://www.ozon.ru/product/1234567890/", 1234567890)
+
+
+def test_normalize_url_short_redirect_not_resolvable_inline():
+    # t/-редиректы регэкспом не решаются (возвращаем None — их разворачивает parser.resolve)
+    assert normalize_url("https://ozon.ru/t/Xk2Pq9") is None
+
+
 # --- parse_price_block (текстовый фолбэк: min/max) --------------------------
 
 def test_price_block_plain_only():

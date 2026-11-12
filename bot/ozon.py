@@ -32,9 +32,13 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _PRODUCT_URL_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?ozon\.ru/product/([^/?#]+)/?", re.IGNORECASE
+    r"(?:https?://)?(?:www\.)?(?:ozon|ozone)\.ru/product/([^/?#]+)/?", re.IGNORECASE
 )
 _SKU_RE = re.compile(r"(\d{5,})\s*/?\s*$")
+# старый формат карточек: ozon.ru/context/detail/id/123456789
+_OLD_STYLE_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:ozon|ozone)\.ru/context/detail/id/(\d{5,})", re.IGNORECASE
+)
 
 # Число с разделителями разрядов (пробел, узкий пробел, nbsp) и знаком рубля
 _PRICE_IN_TEXT_RE = re.compile(r"(\d[\d   \s]{0,15})\s*₽")
@@ -60,7 +64,17 @@ BODY_BLOCK_MARKERS = ("antibot challenge", "доступ ограничен", "�
 
 
 def normalize_url(raw: str) -> tuple[str, int] | None:
-    """Из любой ссылки/текста с ozon.ru/product/... -> (канонический url, sku)."""
+    """Из любой ссылки/текста с карточкой Ozon -> (канонический url, sku).
+
+    Понимает /product/<slug>-<sku>/, /product/<sku> и старый
+    /context/detail/id/<sku> на доменах ozon.ru и ozone.ru. Короткие
+    редиректы (ozon.ru/t/<hash>) через регэксп не решаются — их
+    разворачивает OzonParser.resolve.
+    """
+    m = _OLD_STYLE_RE.search(raw)
+    if m:
+        sku = int(m.group(1))
+        return f"https://www.ozon.ru/product/{sku}/", sku
     m = _PRODUCT_URL_RE.search(raw)
     if not m:
         return None
@@ -368,6 +382,34 @@ class OzonParser:
                 return live[1], live[0]
             return live[0], None
         return None, None
+
+    async def resolve(self, raw_url: str) -> tuple[str, int] | None:
+        """Развернуть короткую/редиректную ссылку (ozon.ru/t/<hash> и т.п.):
+
+        открываем её в Chrome, ждём, пока URL станет карточкой товара,
+        и нормализуем финальный адрес. None — не дождались.
+        """
+        async with self._lock:
+            try:
+                await self.start()
+                page = await self._new_page()
+                try:
+                    await page.goto(raw_url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+                    deadline = time.monotonic() + config.CHALLENGE_WAIT_S
+                    while time.monotonic() < deadline:
+                        m = normalize_url(page.url)
+                        if m:
+                            return m
+                        await asyncio.sleep(1.0)
+                    return normalize_url(page.url)
+                finally:
+                    try:
+                        await page.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception as exc:  # noqa: BLE001
+                log.warning("resolve(%s): %r", raw_url, exc)
+                return None
 
     async def fetch_title(self, url: str) -> str | None:
         """Отдельная попытка достать только название.

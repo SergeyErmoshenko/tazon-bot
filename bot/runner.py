@@ -112,6 +112,15 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
             await get_parser().close()
 
 
+async def resolve_single(raw_url: str) -> tuple[str, int] | None:
+    """Развернуть короткую ссылку через Chrome (под общим локом, с гашением)."""
+    async with _run_lock:
+        try:
+            return await get_parser().resolve(raw_url)
+        finally:
+            await get_parser().close()
+
+
 async def run_single(bot: Bot, product: db.Product) -> tuple[str, db.Product]:
     """Проверка одного товара (при добавлении) под общим локом.
 

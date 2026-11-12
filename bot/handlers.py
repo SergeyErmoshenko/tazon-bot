@@ -18,7 +18,7 @@ from . import config, db
 from .charts import make_chart
 from .notifier import effective_price
 from .ozon import normalize_url
-from .runner import run_check_all, run_single
+from .runner import resolve_single, run_check_all, run_single
 
 log = logging.getLogger(__name__)
 
@@ -171,7 +171,15 @@ async def cb_del(callback: CallbackQuery) -> None:
 @router.message(F.text)
 async def add_product(message: Message, bot: Bot) -> None:
     chat_id = message.chat.id
-    normalized = normalize_url(message.text or "")
+    text = (message.text or "").strip()
+    normalized = normalize_url(text)
+    if normalized is None and "ozon" in text.lower():
+        # похоже на ссылку Ozon, но не карточка (короткий редирект ozon.ru/t/…,
+        # старый формат и т.п.) — разворачиваем в Chrome
+        wait = await message.answer("Похоже на короткую ссылку — разворачиваю…")
+        normalized = await resolve_single(text)
+        if normalized is not None:
+            await wait.edit_text("Развернул, добавляю…")
     if normalized is None:
         await message.answer("Это не ссылка на товар Ozon. Жду ссылку вида https://www.ozon.ru/product/…")
         return
