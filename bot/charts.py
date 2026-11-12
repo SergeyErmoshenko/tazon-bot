@@ -41,11 +41,11 @@ def make_chart(product: Product, points: list[PricePoint]) -> bytes:
         title = title[:70] + "…"
     ax.set_title(title, fontsize=11, loc="left")
 
-    # формат оси времени — по разбросу данных: много точек за неделю+
-    # схлопываются в дни, без часов
+    # формат оси времени — по разбросу данных: часы держим как можно дольше,
+    # дни без часов — только когда истории больше недели
     if times:
         span_days = (times[-1] - times[0]).total_seconds() / 86400
-        if span_days >= 3:
+        if span_days >= 7:
             date_fmt = "%d.%m"
         elif span_days < 1:
             date_fmt = "%H:%M"
