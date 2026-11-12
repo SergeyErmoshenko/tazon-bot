@@ -52,7 +52,7 @@ async def cmd_list(message: Message) -> None:
 
     rows: list[str] = []
     buttons: list[list[InlineKeyboardButton]] = []
-    for p in products:
+    for i, p in enumerate(products, 1):
         last = db.get_last_point(p.id)
         first = db.get_first_point(p.id)
         title = (p.title or "⏳ название уточню при следующей проверке")
@@ -68,8 +68,8 @@ async def cmd_list(message: Message) -> None:
             d = last.price - first.price
             sign = "+" if d > 0 else ""
             delta = f" ({sign}{d:,} ₽ к первой)".replace(",", " ")
-        rows.append(f"{p.id}. {title} — {price_str}{delta}")
-        buttons.append([InlineKeyboardButton(text=f"📈 {p.id}. {title[:40]}", callback_data=f"chart:{p.id}")])
+        rows.append(f"{i}. {title} — {price_str}{delta}")
+        buttons.append([InlineKeyboardButton(text=f"📈 {i}. {title[:40]}", callback_data=f"chart:{p.id}")])
 
     await message.answer(
         "Твои товары:\n" + "\n".join(rows) + "\n\nКнопка — график:",
