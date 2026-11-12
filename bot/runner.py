@@ -11,6 +11,9 @@ import random
 
 from aiogram import Bot
 
+from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 from . import config, db, notifier
 from .ozon import OzonParser
 
@@ -27,10 +30,18 @@ def get_parser() -> OzonParser:
     return _parser
 
 
-async def _notify_subscribers(bot: Bot, product: db.Product, text: str) -> None:
+def _chart_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📈 График", callback_data=f"chart:{product_id}")]]
+    )
+
+
+async def _notify_subscribers(bot: Bot, product: db.Product, text: str,
+                              with_chart_button: bool = False) -> None:
+    markup = _chart_keyboard(product.id) if with_chart_button else None
     for chat_id in db.subscribers(product.id):
         try:
-            await bot.send_message(chat_id, text, disable_web_page_preview=True)
+            await bot.send_message(chat_id, text, disable_web_page_preview=True, reply_markup=markup)
         except Exception:  # noqa: BLE001 — один недоступный чат не роняет рассылку
             log.warning("Не доставил уведомление chat_id=%s (product %s)", chat_id, product.sku)
 
@@ -71,7 +82,7 @@ async def check_product(bot: Bot, product: db.Product) -> str:
     drops = notifier.detect_drops(prev, result.price, result.card_price)
     msg = notifier.build_drop_message(product, drops)
     if msg:
-        await _notify_subscribers(bot, product, msg)
+        await _notify_subscribers(bot, product, msg, with_chart_button=True)
         log.info("Снижение по %s: %s", product.url, drops)
     return "drop" if drops else "ok"
 
