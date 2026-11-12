@@ -69,7 +69,7 @@ async def cmd_list(message: Message) -> None:
             sign = "+" if d > 0 else ""
             delta = f" ({sign}{d:,} ₽ к первой)".replace(",", " ")
         rows.append(f"{p.id}. {title} — {price_str}{delta}")
-        buttons.append([InlineKeyboardButton(text=f"📈 {i}. {title[:40]}", callback_data=f"chart:{p.id}")])
+        buttons.append([InlineKeyboardButton(text=f"📈 {p.id}. {title[:40]}", callback_data=f"chart:{p.id}")])
 
     await message.answer(
         "Твои товары:\n" + "\n".join(rows) + "\n\nКнопка — график:",
