@@ -68,7 +68,7 @@ async def cmd_list(message: Message) -> None:
             d = last.price - first.price
             sign = "+" if d > 0 else ""
             delta = f" ({sign}{d:,} ₽ к первой)".replace(",", " ")
-        rows.append(f"{i}. {title} — {price_str}{delta}")
+        rows.append(f"{i}. {title} — {price_str}{delta}\n   {p.display_url}")
         buttons.append([InlineKeyboardButton(text=f"📈 {i}. {title[:40]}", callback_data=f"chart:{p.id}")])
 
     await message.answer(
@@ -106,7 +106,7 @@ async def cmd_del(message: Message) -> None:
     buttons: list[list[InlineKeyboardButton]] = []
     for i, p in enumerate(products, 1):
         title = (p.title or "(название уточню при следующей проверке)").strip()
-        lines.append(f"{i}. {title}\n   {p.url}")
+        lines.append(f"{i}. {title}\n   {p.display_url}")
         short = title if len(title) <= 50 else title[:50] + "…"
         buttons.append([InlineKeyboardButton(text=f"🗑 {i}. {short}", callback_data=f"del:{p.id}")])
     await message.answer(
@@ -182,7 +182,7 @@ async def add_product(message: Message, bot: Bot) -> None:
         await message.answer("Этот товар уже есть в твоём списке 🙂")
         return
 
-    product = db.add_product(url, sku, title=None)
+    product = db.add_product(url, sku, title=None, orig_url=(message.text or "").strip())
     db.subscribe(chat_id, product.id)
 
     status = await message.answer("Открываю карточку, смотрю цену…")

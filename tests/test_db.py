@@ -16,10 +16,19 @@ def db(tmp_path, monkeypatch):
 
 
 def test_add_product_is_global(db):
-    p = db.add_product("https://www.ozon.ru/product/111/", 111, "Товар 1")
+    p = db.add_product("https://www.ozon.ru/product/111/", 111, "Товар 1",
+                       orig_url="https://www.ozon.ru/product/111/?at=ref&sh=xyz")
     assert p.id is not None and p.title == "Товар 1"
-    same = db.add_product("https://www.ozon.ru/product/111/", 111, "Дубль")
+    assert p.display_url.endswith("?at=ref&sh=xyz")  # оригинальная ссылка сохранена
+    same = db.add_product("https://www.ozon.ru/product/111/", 111, "Дубль",
+                          orig_url="https://www.ozon.ru/product/111/?at=other")
     assert same.id == p.id  # один URL = одна строка независимо от того, кто добавляет
+    assert same.display_url.endswith("sh=xyz")  # первый оригинал не перезаписывается
+
+
+def test_add_product_without_orig_falls_back(db):
+    p = db.add_product("https://www.ozon.ru/product/222/", 222, None)
+    assert p.display_url == p.url
 
 
 def test_subscribe_unsubscribe(db):

@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS products (
     title      TEXT,
     is_active  INTEGER NOT NULL DEFAULT 1,
     fail_count INTEGER NOT NULL DEFAULT 0,
-    added_at   TEXT NOT NULL
+    added_at   TEXT NOT NULL,
+    orig_url   TEXT
 );
 CREATE TABLE IF NOT EXISTS price_points (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,6 +57,12 @@ class Product:
     is_active: bool
     fail_count: int
     added_at: str
+    orig_url: str | None = None  # ссылка, которой товар добавили (с реферальными хвостами)
+
+    @property
+    def display_url(self) -> str:
+        """Ссылка для показа пользователю: оригинальная, если сохранилась."""
+        return self.orig_url or self.url
 
 
 @dataclass
@@ -78,6 +85,12 @@ def _connect() -> sqlite3.Connection:
 def init_db() -> None:
     with _connect() as conn:
         conn.executescript(_SCHEMA)
+        # миграция для БД, созданных до появления orig_url
+        try:
+            conn.execute("ALTER TABLE products ADD COLUMN orig_url TEXT")
+        except sqlite3.OperationalError:
+            pass  # колонка уже есть
+        conn.execute("UPDATE products SET orig_url = url WHERE orig_url IS NULL")
 
 
 def _row_to_product(row: sqlite3.Row) -> Product:
@@ -89,6 +102,7 @@ def _row_to_product(row: sqlite3.Row) -> Product:
         is_active=bool(row["is_active"]),
         fail_count=row["fail_count"],
         added_at=row["added_at"],
+        orig_url=row["orig_url"],
     )
 
 
@@ -102,15 +116,22 @@ def _row_to_point(row: sqlite3.Row) -> PricePoint:
     )
 
 
-def add_product(url: str, sku: int, title: str | None) -> Product:
-    """Получить глобальный товар по sku (создать, если первый раз)."""
+def add_product(url: str, sku: int, title: str | None, orig_url: str | None = None) -> Product:
+    """Получить глобальный товар по sku (создать, если первый раз).
+
+    orig_url — ссылка, которой товар добавили (с реферальными хвостами):
+    запоминаем при первом добавлении, у существующего товара не перезаписываем.
+    """
     with _connect() as conn:
         existing = conn.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
         if existing:
+            if orig_url and not existing["orig_url"]:
+                conn.execute("UPDATE products SET orig_url = ? WHERE id = ?", (orig_url, existing["id"]))
+                existing = conn.execute("SELECT * FROM products WHERE id = ?", (existing["id"],)).fetchone()
             return _row_to_product(existing)
         cur = conn.execute(
-            "INSERT INTO products (url, sku, title, added_at) VALUES (?, ?, ?, ?)",
-            (url, sku, title, datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO products (url, sku, title, added_at, orig_url) VALUES (?, ?, ?, ?, ?)",
+            (url, sku, title, datetime.now().isoformat(timespec="seconds"), orig_url or url),
         )
         row = conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _row_to_product(row)

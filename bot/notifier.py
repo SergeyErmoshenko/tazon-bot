@@ -56,7 +56,7 @@ def build_drop_message(product: Product, drops: list[Drop]) -> str | None:
     lines = [f"📉 <b>{_escape(title)}</b>", ""]
     for d in drops:
         lines.append(f"{d.label}: {fmt_rub(d.old)} ₽ → <b>{fmt_rub(d.new)} ₽</b> (−{fmt_rub(d.diff)} ₽, −{d.percent}%)")
-    lines += ["", f"{product.url}"]
+    lines += ["", product.display_url]
     return "\n".join(lines)
 
 
