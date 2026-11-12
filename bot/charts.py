@@ -41,7 +41,19 @@ def make_chart(product: Product, points: list[PricePoint]) -> bytes:
         title = title[:70] + "…"
     ax.set_title(title, fontsize=11, loc="left")
 
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
+    # формат оси времени — по разбросу данных: много точек за неделю+
+    # схлопываются в дни, без часов
+    if times:
+        span_days = (times[-1] - times[0]).total_seconds() / 86400
+        if span_days >= 3:
+            date_fmt = "%d.%m"
+        elif span_days < 1:
+            date_fmt = "%H:%M"
+        else:
+            date_fmt = "%d.%m %H:%M"
+    else:
+        date_fmt = "%d.%m"
+    ax.xaxis.set_major_formatter(mdates.DateFormatter(date_fmt))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
     ax.set_ylabel("₽" + ("  (с Ozon Картой)" if has_card else ""))
     ax.grid(True, alpha=0.25, linewidth=0.6)
