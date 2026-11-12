@@ -6,8 +6,8 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
-from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                           Message)
+from aiogram.types import (BufferedInputFile, CallbackQuery, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message)
 
 from . import config, db
 from .charts import make_chart
@@ -149,7 +149,7 @@ async def cb_chart(callback: CallbackQuery, bot: Bot) -> None:
     png = make_chart(product, history)
     await bot.send_photo(
         config.require_settings().admin_chat_id,
-        photo=png,
+        photo=BufferedInputFile(png, filename="chart.png"),
         caption=f"📈 {product.title or product.url}\n{len(history)} точек истории",
     )
 
