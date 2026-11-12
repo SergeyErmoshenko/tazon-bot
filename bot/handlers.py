@@ -18,7 +18,7 @@ from . import config, db
 from .charts import make_chart
 from .notifier import effective_price
 from .ozon import normalize_url
-from .runner import check_product, get_parser, run_check_all
+from .runner import run_check_all, run_single
 
 log = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ async def add_product(message: Message, bot: Bot) -> None:
     db.subscribe(chat_id, product.id)
 
     status = await message.answer("Открываю карточку, смотрю цену…")
-    result = await check_product(bot, product)
+    result, product = await run_single(bot, product)
 
     if result == "blocked":
         await status.edit_text(
@@ -203,14 +203,6 @@ async def add_product(message: Message, bot: Bot) -> None:
             f"{url}\nЕсли товар сняли с продажи — /del и удали."
         )
         return
-
-    # гарантируем название сразу: отдельная попытка, если основной прогон не дождался
-    product = db.get_product(product.id) or product
-    if not product.title:
-        title = await get_parser().fetch_title(url)
-        if title:
-            db.update_title(product.id, title)
-            product = db.get_product(product.id) or product
 
     last = db.get_last_point(product.id)
     price_str = "цена не отображается"

@@ -77,29 +77,55 @@ async def check_product(bot: Bot, product: db.Product) -> str:
 
 
 async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
-    """Прогон: товары пользователя (chat_id) или все (расписание)."""
+    """Прогон: товары пользователя (chat_id) или все (расписание).
+
+    Chrome терминируется в finally — он нужен только на время прогона
+    (свежий subprocess проходит антибот так же, см. CLAUDE.md).
+    """
     async with _run_lock:
-        products = db.list_user_products(chat_id) if chat_id else db.list_all_products()
-        if not products:
-            return "Список товаров пуст — кинь мне ссылку на товар Ozon, чтобы добавить."
+        try:
+            products = db.list_user_products(chat_id) if chat_id else db.list_all_products()
+            if not products:
+                return "Список товаров пуст — кинь мне ссылку на товар Ozon, чтобы добавить."
 
-        stats = {"ok": 0, "drop": 0, "blocked": 0, "error": 0}
-        for i, product in enumerate(products):
-            try:
-                status = await check_product(bot, product)
-            except Exception:  # noqa: BLE001 — один товар не должен ронять прогон
-                log.exception("Прогон по товару %s упал", product.url)
-                status = "error"
-            stats[status] = stats.get(status, 0) + 1
-            if i < len(products) - 1:
-                await asyncio.sleep(random.uniform(*config.DELAY_BETWEEN_PRODUCTS))
+            stats = {"ok": 0, "drop": 0, "blocked": 0, "error": 0}
+            for i, product in enumerate(products):
+                try:
+                    status = await check_product(bot, product)
+                except Exception:  # noqa: BLE001 — один товар не должен ронять прогон
+                    log.exception("Прогон по товару %s упал", product.url)
+                    status = "error"
+                stats[status] = stats.get(status, 0) + 1
+                if i < len(products) - 1:
+                    await asyncio.sleep(random.uniform(*config.DELAY_BETWEEN_PRODUCTS))
 
-        summary = (
-            f"✅ Проверено {len(products)}: "
-            f"снизились {stats.get('drop', 0)}, "
-            f"без изменений {stats.get('ok', 0)}, "
-            f"антибот {stats.get('blocked', 0)}, "
-            f"ошибки {stats.get('error', 0)}"
-        )
-        log.info(summary)
-        return summary
+            summary = (
+                f"✅ Проверено {len(products)}: "
+                f"снизились {stats.get('drop', 0)}, "
+                f"без изменений {stats.get('ok', 0)}, "
+                f"антибот {stats.get('blocked', 0)}, "
+                f"ошибки {stats.get('error', 0)}"
+            )
+            log.info(summary)
+            return summary
+        finally:
+            await get_parser().close()
+
+
+async def run_single(bot: Bot, product: db.Product) -> tuple[str, db.Product]:
+    """Проверка одного товара (при добавлении) под общим локом.
+
+    Возвращает (статус, свежий Product). Тоже гасит Chrome по завершении.
+    """
+    async with _run_lock:
+        try:
+            status = await check_product(bot, product)
+            product = db.get_product(product.id) or product
+            if status == "ok" and not product.title:
+                title = await get_parser().fetch_title(product.url)
+                if title:
+                    db.update_title(product.id, title)
+                    product = db.get_product(product.id) or product
+            return status, product
+        finally:
+            await get_parser().close()

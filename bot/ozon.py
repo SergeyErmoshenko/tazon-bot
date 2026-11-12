@@ -217,6 +217,12 @@ class OzonParser:
                     f"--remote-debugging-port={port}",
                     f"--user-data-dir={config.BROWSER_PROFILE_DIR}",
                     "--start-minimized",
+                    # фоновый жор режем: без фоновой сети/синхронизации/обновлений
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--disable-sync",
+                    "--mute-audio",
+                    "--no-first-run",
                     "about:blank",
                 ],
                 creationflags=creationflags,
@@ -248,7 +254,15 @@ class OzonParser:
         self._playwright = None
         if self._proc is not None:
             try:
-                self._proc.terminate()
+                if sys.platform == "win32":
+                    # terminate() убивает только главный процесс; Chrome-дети
+                    # (renderer/GPU) могут осиротеть — глушим всё дерево
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(self._proc.pid)],
+                        capture_output=True, check=False,
+                    )
+                else:
+                    self._proc.terminate()
             except Exception:  # noqa: BLE001
                 pass
             self._proc = None

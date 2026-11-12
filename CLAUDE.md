@@ -43,6 +43,9 @@ Telegram-бот мониторинга цен на Ozon. Этот файл — �
 3. Рабочая схема (`bot/ozon.py`): Chrome стартует как **обычный subprocess**
    (`--remote-debugging-port=9222 --user-data-dir=... --start-minimized`),
    Playwright подключается `connect_over_cdp`. Работает даже в session 0 по SSH.
+   Chrome ЖИВЁТ ТОЛЬКО во время прогона: `run_check_all`/`run_single` гасят его
+   в finally (`close()` = taskkill /T — terminate() оставляет сирот-детей).
+   Холодный старт челлендж проходит так же (проверено), ноутбуку легче.
 4. 403 + title «Antibot Challenge Page» ≠ блок: челлендж проходится сам и
    страница рендерится. Признак блока — только отсутствие цен после ~20 с.
 5. Цены Ozon персонализированы: цифры у владельца и у бота отличаются на
