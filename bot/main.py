@@ -11,6 +11,7 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 
 from . import config, db
 from .handlers import setup_router
@@ -48,6 +49,12 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    await bot.set_my_commands([
+        BotCommand(command="list", description="Мой список товаров и графики"),
+        BotCommand(command="check", description="Проверить мои товары прямо сейчас"),
+        BotCommand(command="del", description="Удалить товар (или /del <ссылка>)"),
+        BotCommand(command="help", description="Как пользоваться ботом"),
+    ])
     dp = Dispatcher()
     dp.include_router(setup_router())
 
