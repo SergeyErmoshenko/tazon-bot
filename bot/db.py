@@ -137,6 +137,12 @@ def add_product(url: str, sku: int, title: str | None, orig_url: str | None = No
         return _row_to_product(row)
 
 
+def update_orig_url(product_id: int, orig_url: str) -> None:
+    """Перезаписать оригинальную ссылку (пользователь прислал товар повторно)."""
+    with _connect() as conn:
+        conn.execute("UPDATE products SET orig_url = ? WHERE id = ?", (orig_url, product_id))
+
+
 def subscribe(chat_id: int, product_id: int) -> bool:
     """Подписать пользователя на товар. False, если уже подписан."""
     with _connect() as conn:

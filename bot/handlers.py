@@ -68,7 +68,7 @@ async def cmd_list(message: Message) -> None:
             d = last.price - first.price
             sign = "+" if d > 0 else ""
             delta = f" ({sign}{d:,} ₽ к первой)".replace(",", " ")
-        rows.append(f"{i}. {title} — {price_str}{delta}\n   {p.display_url}")
+        rows.append(f"{i}. {title} — {price_str}{delta}\n   ссылка: {p.display_url}")
         buttons.append([InlineKeyboardButton(text=f"📈 {i}. {title[:40]}", callback_data=f"chart:{p.id}")])
 
     await message.answer(
@@ -106,7 +106,7 @@ async def cmd_del(message: Message) -> None:
     buttons: list[list[InlineKeyboardButton]] = []
     for i, p in enumerate(products, 1):
         title = (p.title or "(название уточню при следующей проверке)").strip()
-        lines.append(f"{i}. {title}\n   {p.display_url}")
+        lines.append(f"{i}. {title}\n   ссылка: {p.display_url}")
         short = title if len(title) <= 50 else title[:50] + "…"
         buttons.append([InlineKeyboardButton(text=f"🗑 {i}. {short}", callback_data=f"del:{p.id}")])
     await message.answer(
@@ -176,13 +176,16 @@ async def add_product(message: Message, bot: Bot) -> None:
         await message.answer("Это не ссылка на товар Ozon. Жду ссылку вида https://www.ozon.ru/product/…")
         return
     url, sku = normalized
+    sent_link = (message.text or "").strip()
 
     existing = db.get_by_sku(sku)
     if existing and db.is_subscribed(chat_id, existing.id):
-        await message.answer("Этот товар уже есть в твоём списке 🙂")
+        # уже в списке — но обновим сохранённую ссылку на присланный вариант
+        db.update_orig_url(existing.id, sent_link)
+        await message.answer("Этот товар уже в твоём списке 🙂 — обновил ссылку на присланный вариант.")
         return
 
-    product = db.add_product(url, sku, title=None, orig_url=(message.text or "").strip())
+    product = db.add_product(url, sku, title=None, orig_url=sent_link)
     db.subscribe(chat_id, product.id)
 
     status = await message.answer("Открываю карточку, смотрю цену…")
