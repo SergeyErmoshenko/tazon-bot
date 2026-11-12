@@ -1,15 +1,19 @@
-"""SQLite-хранилище: товары и история цен.
+"""SQLite-хранилище: товары, подписки и история цен.
 
-Соединение открывается на операцию — для одного процесса с парой запросов в минуту
-это дешевле, чем держать коннект и следить за потоками.
-Время пишем локальное (datetime.now(), без tz) — оно же идёт на графики.
+Модель многопользовательская: товары глобальные (один URL = одна строка и одна
+история — дублировать обход для разных людей незачем), а пользователи подписаны
+на товары через таблицу subscriptions. Уведомления уходят всем подписчикам;
+товар с нулём подписчиков удаляется вместе с историей.
+
+Соединение открывается на операцию — для одного процесса с парой запросов в
+минуту это дешевле, чем держать коннект. Время пишем локальное (datetime.now(),
+без tz) — оно же идёт на графики.
 """
 from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 from . import config
 
@@ -30,8 +34,16 @@ CREATE TABLE IF NOT EXISTS price_points (
     card_price INTEGER,
     checked_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS subscriptions (
+    chat_id    INTEGER NOT NULL,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    added_at   TEXT NOT NULL,
+    PRIMARY KEY (chat_id, product_id)
+);
 CREATE INDEX IF NOT EXISTS idx_points_product
     ON price_points(product_id, checked_at);
+CREATE INDEX IF NOT EXISTS idx_subs_chat
+    ON subscriptions(chat_id);
 """
 
 
@@ -91,7 +103,7 @@ def _row_to_point(row: sqlite3.Row) -> PricePoint:
 
 
 def add_product(url: str, sku: int, title: str | None) -> Product:
-    """Добавить товар. Если sku уже есть — вернуть существующего (без изменений)."""
+    """Получить глобальный товар по sku (создать, если первый раз)."""
     with _connect() as conn:
         existing = conn.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
         if existing:
@@ -102,6 +114,52 @@ def add_product(url: str, sku: int, title: str | None) -> Product:
         )
         row = conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _row_to_product(row)
+
+
+def subscribe(chat_id: int, product_id: int) -> bool:
+    """Подписать пользователя на товар. False, если уже подписан."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO subscriptions (chat_id, product_id, added_at) VALUES (?, ?, ?)",
+            (chat_id, product_id, datetime.now().isoformat(timespec="seconds")),
+        )
+        return cur.rowcount > 0
+
+
+def unsubscribe(chat_id: int, product_id: int) -> bool:
+    """Отписать пользователя. Если подписчиков не осталось — удалить товар
+    вместе с историей. True, если подписка была снята."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM subscriptions WHERE chat_id = ? AND product_id = ?",
+            (chat_id, product_id),
+        )
+        if cur.rowcount == 0:
+            return False
+        left = conn.execute(
+            "SELECT COUNT(*) FROM subscriptions WHERE product_id = ?", (product_id,)
+        ).fetchone()[0]
+        if left == 0:
+            conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+        return True
+
+
+def subscribers(product_id: int) -> list[int]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT chat_id FROM subscriptions WHERE product_id = ? ORDER BY chat_id",
+            (product_id,),
+        ).fetchall()
+        return [r["chat_id"] for r in rows]
+
+
+def is_subscribed(chat_id: int, product_id: int) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM subscriptions WHERE chat_id = ? AND product_id = ?",
+            (chat_id, product_id),
+        ).fetchone()
+        return row is not None
 
 
 def get_by_sku(sku: int) -> Product | None:
@@ -116,19 +174,22 @@ def get_product(product_id: int) -> Product | None:
         return _row_to_product(row) if row else None
 
 
-def list_products(active_only: bool = True) -> list[Product]:
-    query = "SELECT * FROM products"
-    if active_only:
-        query += " WHERE is_active = 1"
-    query += " ORDER BY id"
+def list_user_products(chat_id: int) -> list[Product]:
+    """Товары, на которые подписан пользователь."""
     with _connect() as conn:
-        return [_row_to_product(r) for r in conn.execute(query).fetchall()]
+        rows = conn.execute(
+            "SELECT p.* FROM products p JOIN subscriptions s ON s.product_id = p.id "
+            "WHERE s.chat_id = ? ORDER BY p.id",
+            (chat_id,),
+        ).fetchall()
+        return [_row_to_product(r) for r in rows]
 
 
-def delete_product(product_id: int) -> bool:
+def list_all_products() -> list[Product]:
+    """Все товары бота (для планового прогона: проверяем каждый URL один раз)."""
     with _connect() as conn:
-        cur = conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
-        return cur.rowcount > 0
+        rows = conn.execute("SELECT * FROM products ORDER BY id").fetchall()
+        return [_row_to_product(r) for r in rows]
 
 
 def get_last_point(product_id: int) -> PricePoint | None:
@@ -187,3 +248,21 @@ def reset_fail(product_id: int) -> None:
 def update_title(product_id: int, title: str) -> None:
     with _connect() as conn:
         conn.execute("UPDATE products SET title = ? WHERE id = ?", (title, product_id))
+
+
+def backfill_subscriptions(default_chat_id: int) -> int:
+    """Гарантировать инвариант «у товара есть подписчик»: товары без
+    подписчиков (наследие старой схемы) приписываются default_chat_id.
+    Возвращает число приписанных."""
+    with _connect() as conn:
+        orphans = conn.execute(
+            "SELECT p.id FROM products p LEFT JOIN subscriptions s ON s.product_id = p.id "
+            "WHERE s.chat_id IS NULL"
+        ).fetchall()
+        now = datetime.now().isoformat(timespec="seconds")
+        for row in orphans:
+            conn.execute(
+                "INSERT OR IGNORE INTO subscriptions (chat_id, product_id, added_at) VALUES (?, ?, ?)",
+                (default_chat_id, row["id"], now),
+            )
+        return len(orphans)

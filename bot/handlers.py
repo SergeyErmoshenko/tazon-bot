@@ -1,4 +1,9 @@
-"""Telegram-хендлеры: добавление по ссылке, список, графики, удаление, форс-проверка."""
+"""Telegram-хендлеры: многопользовательский режим.
+
+Каждый пользователь ведёт свой список (таблица подписок); одинаковые товары
+у разных людей разделяют одну историю цен — обход идёт один раз на URL.
+Уведомления о снижении получают все подписчики товара.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -21,21 +26,15 @@ router = Router()
 
 HELP_TEXT = (
     "Я слежу за ценами на Ozon 🛰\n\n"
-    "• Кинь ссылку на товар — добавлю в мониторинг и покажу текущую цену\n"
-    "• /list — список товаров (кнопка с 📈 пришлёт график)\n"
-    "• /check — проверить все прямо сейчас\n"
+    "• Кинь ссылку на товар — добавлю в твой список и покажу текущую цену\n"
+    "• /list — твой список товаров (кнопка пришлёт график)\n"
+    "• /check — проверить твои товары прямо сейчас\n"
     "• /del — удалить товар (можно сразу со ссылкой: /del https://…)\n"
     "• /help — эта справка\n\n"
-    "Проверяю по расписанию, уведомлю при снижении "
-    "(обычной цены или цены по Ozon Карте)."
+    "Проверяю по расписанию, уведомлю при снижении минимальной цены "
+    "(«с Ozon Картой» / «С банками»). Один и тот же товар у разных людей — "
+    "общая история цен, но уведомления у каждого свои."
 )
-
-
-def _guard(router: Router) -> None:
-    """Бот отвечает только владельцу (ADMIN_CHAT_ID)."""
-    admin_id = config.require_settings().admin_chat_id
-    router.message.filter(F.chat.id == admin_id)
-    router.callback_query.filter(F.from_user.id == admin_id)
 
 
 @router.message(Command("start", "help"))
@@ -45,9 +44,10 @@ async def cmd_start(message: Message) -> None:
 
 @router.message(Command("list"))
 async def cmd_list(message: Message) -> None:
-    products = db.list_products(active_only=False)
+    chat_id = message.chat.id
+    products = db.list_user_products(chat_id)
     if not products:
-        await message.answer("Список пуст. Кинь мне ссылку на товар Ozon — добавлю.")
+        await message.answer("Твой список пуст. Кинь мне ссылку на товар Ozon — добавлю.")
         return
 
     rows: list[str] = []
@@ -80,6 +80,7 @@ async def cmd_list(message: Message) -> None:
 
 @router.message(Command("del"))
 async def cmd_del(message: Message) -> None:
+    chat_id = message.chat.id
     # /del <ссылка> — удалить по ссылке; /del — показать кнопки
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) > 1 and parts[1].strip():
@@ -89,17 +90,17 @@ async def cmd_del(message: Message) -> None:
             return
         _, sku = normalized
         product = db.get_by_sku(sku)
-        if not product:
-            await message.answer("Этого товара нет в списке.")
+        if not product or not db.is_subscribed(chat_id, product.id):
+            await message.answer("Этого товара нет в твоём списке.")
             return
-        db.delete_product(product.id)
+        db.unsubscribe(chat_id, product.id)
         title = (product.title or "(без названия)").strip()
-        await message.answer(f"🗑 Удалил:\n{title}\n{product.url}", disable_web_page_preview=True)
+        await message.answer(f"🗑 Удалил из твоего списка:\n{title}\n{product.url}", disable_web_page_preview=True)
         return
 
-    products = db.list_products(active_only=False)
+    products = db.list_user_products(chat_id)
     if not products:
-        await message.answer("Удалять нечего — список пуст.")
+        await message.answer("Удалять нечего — твой список пуст.")
         return
     lines: list[str] = []
     buttons: list[list[InlineKeyboardButton]] = []
@@ -117,29 +118,30 @@ async def cmd_del(message: Message) -> None:
 
 @router.message(Command("check"))
 async def cmd_check(message: Message, bot: Bot) -> None:
-    products = db.list_products(active_only=True)
+    products = db.list_user_products(message.chat.id)
     if not products:
-        await message.answer("Список пуст — добавь сначала товары.")
+        await message.answer("Твой список пуст — добавь сначала товары.")
         return
     est = int(len(products) * (sum(config.DELAY_BETWEEN_PRODUCTS) / 2 + 8) / 60) + 1
     await message.answer(f"Проверяю {len(products)} товаров, это займёт ~{est} мин. При снижении напишу.")
-    asyncio.create_task(_run_and_report(bot))
+    asyncio.create_task(_run_and_report(bot, message.chat.id))
 
 
-async def _run_and_report(bot: Bot) -> None:
+async def _run_and_report(bot: Bot, chat_id: int) -> None:
     try:
-        summary = await run_check_all(bot)
-        await bot.send_message(config.require_settings().admin_chat_id, summary)
+        summary = await run_check_all(bot, chat_id=chat_id)
+        await bot.send_message(chat_id, summary)
     except Exception:  # noqa: BLE001 — фоновая задача не должна молча умереть
         log.exception("Прогон /check упал")
 
 
 @router.callback_query(F.data.startswith("chart:"))
 async def cb_chart(callback: CallbackQuery, bot: Bot) -> None:
-    product_id = int(callback.data.split(":", 1)[1])
+    product_id = int((callback.data or "").split(":", 1)[1])
+    chat_id = callback.from_user.id
     product = db.get_product(product_id)
-    if not product:
-        await callback.answer("Товар уже удалён", show_alert=True)
+    if not product or not db.is_subscribed(chat_id, product_id):
+        await callback.answer("Этого товара нет в твоём списке", show_alert=True)
         return
     history = db.get_history(product_id)
     if len(history) < 2:
@@ -148,7 +150,7 @@ async def cb_chart(callback: CallbackQuery, bot: Bot) -> None:
     await callback.answer("Рисую…")
     png = make_chart(product, history)
     await bot.send_photo(
-        config.require_settings().admin_chat_id,
+        chat_id,
         photo=BufferedInputFile(png, filename="chart.png"),
         caption=f"📈 {product.title or product.url}\n{len(history)} точек истории",
     )
@@ -156,17 +158,19 @@ async def cb_chart(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.callback_query(F.data.startswith("del:"))
 async def cb_del(callback: CallbackQuery) -> None:
-    product_id = int(callback.data.split(":", 1)[1])
-    if db.delete_product(product_id):
-        await callback.answer("Удалил")
+    product_id = int((callback.data or "").split(":", 1)[1])
+    chat_id = callback.from_user.id
+    if db.unsubscribe(chat_id, product_id):
+        await callback.answer("Удалил из твоего списка")
         if callback.message:
             await callback.message.delete()
     else:
-        await callback.answer("Уже удалён", show_alert=True)
+        await callback.answer("Этого товара уже нет в твоём списке", show_alert=True)
 
 
 @router.message(F.text)
 async def add_product(message: Message, bot: Bot) -> None:
+    chat_id = message.chat.id
     normalized = normalize_url(message.text or "")
     if normalized is None:
         await message.answer("Это не ссылка на товар Ozon. Жду ссылку вида https://www.ozon.ru/product/…")
@@ -174,39 +178,37 @@ async def add_product(message: Message, bot: Bot) -> None:
     url, sku = normalized
 
     existing = db.get_by_sku(sku)
-    if existing:
-        last = db.get_last_point(existing.id)
-        if last:
-            await message.answer("Этот товар уже в списке 🙂")
-        else:
-            await message.answer("Этот товар уже в списке, цены ещё не видел — возьму при следующей проверке.")
+    if existing and db.is_subscribed(chat_id, existing.id):
+        await message.answer("Этот товар уже есть в твоём списке 🙂")
         return
 
-    status = await message.answer("Открываю карточку, смотрю цену…")
     product = db.add_product(url, sku, title=None)
+    db.subscribe(chat_id, product.id)
+
+    status = await message.answer("Открываю карточку, смотрю цену…")
     result = await check_product(bot, product)
 
     if result == "blocked":
         await status.edit_text(
-            "Добавил, но антибот сейчас не пустил 🛡\n"
+            "Добавил в твой список, но антибот сейчас не пустил 🛡\n"
             "Цену возьму при следующем прогоне (или попробуй /check через пару минут)."
         )
         return
     if result == "error":
         await status.edit_text(
-            "Добавил, но цену прочитать не удалось 😕\n"
+            "Добавил в твой список, но цену прочитать не удалось 😕\n"
             f"{url}\nЕсли товар сняли с продажи — /del и удали."
         )
         return
 
-    product = db.get_product(product.id) or product  # check_product мог записать title
+    # гарантируем название сразу: отдельная попытка, если основной прогон не дождался
+    product = db.get_product(product.id) or product
     if not product.title:
-        # гарантируем название сразу при добавлении: отдельная попытка,
-        # если основной прогон не дождался заголовка
         title = await get_parser().fetch_title(url)
         if title:
             db.update_title(product.id, title)
             product = db.get_product(product.id) or product
+
     last = db.get_last_point(product.id)
     price_str = "цена не отображается"
     if last:
@@ -215,11 +217,10 @@ async def add_product(message: Message, bot: Bot) -> None:
             price_str = f"{eff:,} ₽".replace(",", " ") + (" с Ozon Картой" if last.card_price else "")
     title = product.title or "(название уточню при следующей проверке)"
     await status.edit_text(
-        f"✅ Добавил в мониторинг:\n{title}\nСейчас: {price_str}\n\n"
-        f"Уведомлю, когда подешевеет. /list — все товары."
+        f"✅ Добавил в твой список:\n{title}\nСейчас: {price_str}\n\n"
+        f"Уведомлю, когда подешевеет. /list — твой список."
     )
 
 
 def setup_router() -> Router:
-    _guard(router)
     return router
