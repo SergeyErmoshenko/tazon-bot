@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -172,19 +173,21 @@ async def cb_del(callback: CallbackQuery) -> None:
 async def add_product(message: Message, bot: Bot) -> None:
     chat_id = message.chat.id
     text = (message.text or "").strip()
+    # ссылку присылают и отдельно, и вместе с описанием товара — вытаскиваем URL
+    url_m = re.search(r"https?://\S+", text)
+    sent_link = url_m.group(0).rstrip(".,)»\"") if url_m else text
     normalized = normalize_url(text)
     if normalized is None and "ozon" in text.lower():
         # похоже на ссылку Ozon, но не карточка (короткий редирект ozon.ru/t/…,
         # старый формат и т.п.) — разворачиваем в Chrome
         wait = await message.answer("Похоже на короткую ссылку — разворачиваю…")
-        normalized = await resolve_single(text)
+        normalized = await resolve_single(sent_link)
         if normalized is not None:
             await wait.edit_text("Развернул, добавляю…")
     if normalized is None:
         await message.answer("Это не ссылка на товар Ozon. Жду ссылку вида https://www.ozon.ru/product/…")
         return
     url, sku = normalized
-    sent_link = (message.text or "").strip()
 
     existing = db.get_by_sku(sku)
     if existing and db.is_subscribed(chat_id, existing.id):
