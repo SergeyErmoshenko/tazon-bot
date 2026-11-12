@@ -34,6 +34,7 @@ def setup_logging() -> None:
 
 async def main() -> None:
     setup_logging()
+    log = logging.getLogger("main")
     config.settings = config.load_settings()
     settings = config.settings
 
@@ -41,7 +42,6 @@ async def main() -> None:
     orphans = db.backfill_subscriptions(settings.admin_chat_id)
     if orphans:
         log.info("Подписал %d товаров без подписчиков на владельца бота", orphans)
-    log = logging.getLogger("main")
     log.info("Старт: chat_id=%s, проверки=%s", settings.admin_chat_id, settings.check_times)
 
     bot = Bot(
