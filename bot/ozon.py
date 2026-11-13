@@ -254,7 +254,25 @@ class OzonParser:
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
         self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+        # картинки и видео в ценах не участвуют, а весят дорого (CPU на рендер
+        # и трафик через VPN) — глушим ещё на уровне сети
+        await self._context.route(
+            "**/*", self._block_heavy_resources,
+        )
         log.info("Подключён к Chrome по CDP (порт %d)", port)
+
+    @staticmethod
+    async def _block_heavy_resources(route) -> None:
+        if route.request.resource_type in ("image", "media"):
+            try:
+                await route.abort()
+            except Exception:  # noqa: BLE001 — страница могла уже закрыться
+                return
+        else:
+            try:
+                await route.continue_()
+            except Exception:  # noqa: BLE001
+                return
 
     async def close(self) -> None:
         for obj, name in ((self._browser, "browser"), (self._playwright, "playwright")):
