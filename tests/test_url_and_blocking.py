@@ -8,21 +8,21 @@ from bot.ozon import (extract_prices_from_html, looks_like_block,
 # --- normalize_url ---------------------------------------------------------
 
 def test_normalize_url_plain():
-    assert normalize_url("https://www.ozon.ru/product/1234567890/") == ("https://www.ozon.ru/product/1234567890/", 1234567890)
+    assert normalize_url("https://www.ozon.ru/product/1234567890/") == ("ozon", "https://www.ozon.ru/product/1234567890/", 1234567890)
 
 
 def test_normalize_url_with_slug():
     url = "https://www.ozon.ru/product/smartfon-apple-iphone-15-128gb-972645812/"
-    assert normalize_url(url) == ("https://www.ozon.ru/product/972645812/", 972645812)
+    assert normalize_url(url) == ("ozon", "https://www.ozon.ru/product/972645812/", 972645812)
 
 
 def test_normalize_url_with_query_and_trash():
     url = "смотри https://www.ozon.ru/product/naushniki-besprovodnye-77123456/?utm=chat&utm=friend&from=sg  классные!"
-    assert normalize_url(url) == ("https://www.ozon.ru/product/77123456/", 77123456)
+    assert normalize_url(url) == ("ozon", "https://www.ozon.ru/product/77123456/", 77123456)
 
 
 def test_normalize_url_mobile_no_scheme():
-    assert normalize_url("ozon.ru/product/5551234567") == ("https://www.ozon.ru/product/5551234567/", 5551234567)
+    assert normalize_url("ozon.ru/product/5551234567") == ("ozon", "https://www.ozon.ru/product/5551234567/", 5551234567)
 
 
 def test_normalize_url_rejects_non_product():
@@ -37,20 +37,38 @@ def test_normalize_url_rejects_slug_without_sku():
 
 def test_normalize_url_plain_sku_short():
     # «короткая» карточка без слага
-    assert normalize_url("https://www.ozon.ru/product/5551234567/") == ("https://www.ozon.ru/product/5551234567/", 5551234567)
+    assert normalize_url("https://www.ozon.ru/product/5551234567/") == ("ozon", "https://www.ozon.ru/product/5551234567/", 5551234567)
 
 
 def test_normalize_url_old_context_detail():
-    assert normalize_url("https://www.ozon.ru/context/detail/id/5677610222/") == ("https://www.ozon.ru/product/5677610222/", 5677610222)
+    assert normalize_url("https://www.ozon.ru/context/detail/id/5677610222/") == ("ozon", "https://www.ozon.ru/product/5677610222/", 5677610222)
 
 
 def test_normalize_url_ozone_domain():
-    assert normalize_url("https://ozone.ru/product/1234567890/") == ("https://www.ozon.ru/product/1234567890/", 1234567890)
+    assert normalize_url("https://ozone.ru/product/1234567890/") == ("ozon", "https://www.ozon.ru/product/1234567890/", 1234567890)
 
 
 def test_normalize_url_short_redirect_not_resolvable_inline():
     # t/-редиректы регэкспом не решаются (возвращаем None — их разворачивает parser.resolve)
     assert normalize_url("https://ozon.ru/t/Xk2Pq9") is None
+
+
+def test_normalize_url_goldapple_slug():
+    url = "https://goldapple.ru/19000007126-skin-guardian"
+    assert normalize_url(url) == ("goldapple", "https://goldapple.ru/19000007126", 19000007126)
+
+
+def test_normalize_url_goldapple_plain_id():
+    store, url, sku = normalize_url("https://goldapple.ru/89270100006-atoderm?utm=x")
+    assert store == "goldapple"
+    assert url == f"https://goldapple.ru/{sku}"  # канон: только id, без слага и utm
+    assert 10 ** 10 <= sku < 10 ** 11            # 11-значный id ЗЯ
+
+
+def test_normalize_url_goldapple_rejects_category():
+    # категории начинаются не с цифр — не товар
+    assert normalize_url("https://goldapple.ru/brands/vichy") is None
+    assert normalize_url("https://goldapple.ru/uhod/uhod-za-licom/kremy") is None
 
 
 # --- parse_price_block (текстовый фолбэк: min/max) --------------------------

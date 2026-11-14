@@ -21,12 +21,14 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS products (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     url        TEXT NOT NULL,
-    sku        INTEGER NOT NULL UNIQUE,
+    sku        INTEGER NOT NULL,
     title      TEXT,
     is_active  INTEGER NOT NULL DEFAULT 1,
     fail_count INTEGER NOT NULL DEFAULT 0,
     added_at   TEXT NOT NULL,
-    orig_url   TEXT
+    orig_url   TEXT,
+    store      TEXT NOT NULL DEFAULT 'ozon',
+    UNIQUE(store, sku)
 );
 CREATE TABLE IF NOT EXISTS price_points (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +60,7 @@ class Product:
     fail_count: int
     added_at: str
     orig_url: str | None = None  # ссылка, которой товар добавили (с реферальными хвостами)
+    store: str = "ozon"          # 'ozon' | 'goldapple'
 
     @property
     def display_url(self) -> str:
@@ -91,6 +94,33 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass  # колонка уже есть
         conn.execute("UPDATE products SET orig_url = url WHERE orig_url IS NULL")
+        # миграция под мультисторовость: UNIQUE(sku) -> UNIQUE(store, sku).
+        # SQLite не умеет DROP CONSTRAINT — пересоздаём таблицу.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(products)")}
+        if "store" not in cols:
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.executescript("""
+                CREATE TABLE products_new (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url        TEXT NOT NULL,
+                    sku        INTEGER NOT NULL,
+                    title      TEXT,
+                    is_active  INTEGER NOT NULL DEFAULT 1,
+                    fail_count INTEGER NOT NULL DEFAULT 0,
+                    added_at   TEXT NOT NULL,
+                    orig_url   TEXT,
+                    store      TEXT NOT NULL DEFAULT 'ozon',
+                    UNIQUE(store, sku)
+                );
+                INSERT INTO products_new
+                    SELECT id, url, sku, title, is_active, fail_count, added_at, orig_url, 'ozon'
+                    FROM products;
+                DROP TABLE products;
+                ALTER TABLE products_new RENAME TO products;
+            """)
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _row_to_product(row: sqlite3.Row) -> Product:
@@ -103,6 +133,7 @@ def _row_to_product(row: sqlite3.Row) -> Product:
         fail_count=row["fail_count"],
         added_at=row["added_at"],
         orig_url=row["orig_url"],
+        store=row["store"],
     )
 
 
@@ -116,22 +147,24 @@ def _row_to_point(row: sqlite3.Row) -> PricePoint:
     )
 
 
-def add_product(url: str, sku: int, title: str | None, orig_url: str | None = None) -> Product:
-    """Получить глобальный товар по sku (создать, если первый раз).
+def add_product(store: str, url: str, sku: int, title: str | None, orig_url: str | None = None) -> Product:
+    """Получить глобальный товар по (store, sku) (создать, если первый раз).
 
     orig_url — ссылка, которой товар добавили (с реферальными хвостами):
     запоминаем при первом добавлении, у существующего товара не перезаписываем.
     """
     with _connect() as conn:
-        existing = conn.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM products WHERE store = ? AND sku = ?", (store, sku)
+        ).fetchone()
         if existing:
             if orig_url and not existing["orig_url"]:
                 conn.execute("UPDATE products SET orig_url = ? WHERE id = ?", (orig_url, existing["id"]))
                 existing = conn.execute("SELECT * FROM products WHERE id = ?", (existing["id"],)).fetchone()
             return _row_to_product(existing)
         cur = conn.execute(
-            "INSERT INTO products (url, sku, title, added_at, orig_url) VALUES (?, ?, ?, ?, ?)",
-            (url, sku, title, datetime.now().isoformat(timespec="seconds"), orig_url or url),
+            "INSERT INTO products (store, url, sku, title, added_at, orig_url) VALUES (?, ?, ?, ?, ?, ?)",
+            (store, url, sku, title, datetime.now().isoformat(timespec="seconds"), orig_url or url),
         )
         row = conn.execute("SELECT * FROM products WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _row_to_product(row)
@@ -189,9 +222,11 @@ def is_subscribed(chat_id: int, product_id: int) -> bool:
         return row is not None
 
 
-def get_by_sku(sku: int) -> Product | None:
+def get_by_store_sku(store: str, sku: int) -> Product | None:
     with _connect() as conn:
-        row = conn.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM products WHERE store = ? AND sku = ?", (store, sku)
+        ).fetchone()
         return _row_to_product(row) if row else None
 
 

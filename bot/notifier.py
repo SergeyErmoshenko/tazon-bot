@@ -32,11 +32,13 @@ def effective_price(price: int | None, card_price: int | None) -> int | None:
     return card_price if card_price is not None else price
 
 
-def detect_drops(old: PricePoint | None, new_price: int | None, new_card: int | None) -> list[Drop]:
+def detect_drops(old: PricePoint | None, new_price: int | None, new_card: int | None,
+                 card_label: str = "Цена с Ozon Картой") -> list[Drop]:
     """Сравнить минимальную цену с последней записанной точкой.
 
     Первая точка (old=None) снижением не считается; None означает
     «не нашли/не отображается» — сравнивать нечего.
+    card_label — название скидочной цены магазина (Ozon Карта / клуб ЗЯ).
     """
     if old is None:
         return []
@@ -44,7 +46,7 @@ def detect_drops(old: PricePoint | None, new_price: int | None, new_card: int | 
     new_eff = effective_price(new_price, new_card)
     if old_eff is None or new_eff is None or new_eff >= old_eff:
         return []
-    label = "Цена с Ozon Картой" if new_card is not None else "Цена"
+    label = card_label if new_card is not None else "Цена"
     return [Drop(label, old_eff, new_eff)]
 
 

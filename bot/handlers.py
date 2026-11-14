@@ -63,7 +63,8 @@ async def cmd_list(message: Message) -> None:
         if last:
             eff = effective_price(last.price, last.card_price)
             if eff is not None:
-                price_str = f"{eff:,} ₽".replace(",", " ") + (" с картой" if last.card_price else "")
+                suffix = " с картой" if last.card_price and p.store == "ozon" else (" в клубе" if last.card_price else "")
+                price_str = f"{eff:,} ₽".replace(",", " ") + suffix
         delta = ""
         if last and first and last.price and first.price and last.price != first.price:
             d = last.price - first.price
@@ -87,10 +88,10 @@ async def cmd_del(message: Message) -> None:
     if len(parts) > 1 and parts[1].strip():
         normalized = normalize_url(parts[1].strip())
         if normalized is None:
-            await message.answer("Это не ссылка на товар Ozon. Пример: /del https://www.ozon.ru/product/…\nИли просто /del — покажу список с кнопками.")
+            await message.answer("Это не ссылка на товар (Ozon или Золотое Яблоко). Пример: /del https://www.ozon.ru/product/…\nИли просто /del — покажу список с кнопками.")
             return
-        _, sku = normalized
-        product = db.get_by_sku(sku)
+        store, _, sku = normalized
+        product = db.get_by_store_sku(store, sku)
         if not product or not db.is_subscribed(chat_id, product.id):
             await message.answer("Этого товара нет в твоём списке.")
             return
@@ -177,26 +178,29 @@ async def add_product(message: Message, bot: Bot) -> None:
     url_m = re.search(r"https?://\S+", text)
     sent_link = url_m.group(0).rstrip(".,)»\"") if url_m else text
     normalized = normalize_url(text)
-    if normalized is None and "ozon" in text.lower():
-        # похоже на ссылку Ozon, но не карточка (короткий редирект ozon.ru/t/…,
+    if normalized is None and ("ozon" in text.lower() or "goldapple" in text.lower() or "ozone" in text.lower()):
+        # похоже на ссылку магазина, но не карточка (короткий редирект ozon.ru/t/…,
         # старый формат и т.п.) — разворачиваем в Chrome
         wait = await message.answer("Похоже на короткую ссылку — разворачиваю…")
         normalized = await resolve_single(sent_link)
         if normalized is not None:
             await wait.edit_text("Развернул, добавляю…")
     if normalized is None:
-        await message.answer("Это не ссылка на товар Ozon. Жду ссылку вида https://www.ozon.ru/product/…")
+        await message.answer(
+            "Это не ссылка на товар. Жду ссылку на карточку Ozon "
+            "(https://www.ozon.ru/product/…) или Золотого Яблока (https://goldapple.ru/…)"
+        )
         return
-    url, sku = normalized
+    store, url, sku = normalized
 
-    existing = db.get_by_sku(sku)
+    existing = db.get_by_store_sku(store, sku)
     if existing and db.is_subscribed(chat_id, existing.id):
         # уже в списке — но обновим сохранённую ссылку на присланный вариант
         db.update_orig_url(existing.id, sent_link)
         await message.answer("Этот товар уже в твоём списке 🙂 — обновил ссылку на присланный вариант.")
         return
 
-    product = db.add_product(url, sku, title=None, orig_url=sent_link)
+    product = db.add_product(store, url, sku, title=None, orig_url=sent_link)
     db.subscribe(chat_id, product.id)
 
     status = await message.answer("Открываю карточку, смотрю цену…")
@@ -220,7 +224,9 @@ async def add_product(message: Message, bot: Bot) -> None:
     if last:
         eff = effective_price(last.price, last.card_price)
         if eff is not None:
-            price_str = f"{eff:,} ₽".replace(",", " ") + (" с Ozon Картой" if last.card_price else "")
+            suffix = (" с Ozon Картой" if last.card_price and product.store == "ozon"
+                      else " в клубе" if last.card_price else "")
+            price_str = f"{eff:,} ₽".replace(",", " ") + suffix
     title = product.title or "(название уточню при следующей проверке)"
     await status.edit_text(
         f"✅ Добавил в твой список:\n{title}\nСейчас: {price_str}\n\n"

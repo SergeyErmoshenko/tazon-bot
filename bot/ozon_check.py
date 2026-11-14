@@ -22,8 +22,8 @@ async def main(argv: list[str]) -> int:
     if normalized is None:
         print("Не похоже на ссылку на товар Ozon: нужна вида https://www.ozon.ru/product/…")
         return 2
-    url, sku = normalized
-    print(f"URL: {url}\nSKU: {sku}\n")
+    store, url, sku = normalized
+    print(f"STORE: {store}\nURL: {url}\nSKU: {sku}\n")
 
     parser = OzonParser()
     try:

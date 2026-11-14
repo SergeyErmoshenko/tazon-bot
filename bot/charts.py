@@ -57,7 +57,9 @@ def make_chart(product: Product, points: list[PricePoint]) -> bytes:
         date_fmt = "%d.%m"
     ax.xaxis.set_major_formatter(mdates.DateFormatter(date_fmt))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
-    ax.set_ylabel("₽" + ("  (с Ozon Картой)" if has_card else ""))
+    card_suffix = ("  (с Ozon Картой)" if has_card and product.store == "ozon"
+                   else "  (в клубе)" if has_card else "")
+    ax.set_ylabel("₽" + card_suffix)
     ax.grid(True, alpha=0.25, linewidth=0.6)
     fig.autofmt_xdate(rotation=30)
     if values:

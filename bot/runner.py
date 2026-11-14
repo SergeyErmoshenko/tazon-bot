@@ -79,7 +79,10 @@ async def check_product(bot: Bot, product: db.Product) -> str:
     prev = db.get_last_point(product.id)
     db.insert_point(product.id, result.price, result.card_price)
 
-    drops = notifier.detect_drops(prev, result.price, result.card_price)
+    drops = notifier.detect_drops(
+        prev, result.price, result.card_price,
+        card_label="Цена с Ozon Картой" if product.store == "ozon" else "Цена в клубе",
+    )
     msg = notifier.build_drop_message(product, drops)
     if msg:
         await _notify_subscribers(bot, product, msg, with_chart_button=True)

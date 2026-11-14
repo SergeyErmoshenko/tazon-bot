@@ -39,6 +39,10 @@ _SKU_RE = re.compile(r"(\d{5,})\s*/?\s*$")
 _OLD_STYLE_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:ozon|ozone)\.ru/context/detail/id/(\d{5,})", re.IGNORECASE
 )
+# Золотое Яблоко: goldapple.ru/19000007126-slug или goldapple.ru/19000007126
+_GA_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?goldapple\.ru/(\d{6,15})(?:[/-]|$|/\s)", re.IGNORECASE
+)
 
 # Число с разделителями разрядов (пробел, узкий пробел, nbsp) и знаком рубля
 _PRICE_IN_TEXT_RE = re.compile(r"(\d[\d   \s]{0,15})\s*₽")
@@ -63,18 +67,22 @@ TITLE_BLOCK_MARKERS = ("antibot", "доступ ограничен", "досту
 BODY_BLOCK_MARKERS = ("antibot challenge", "доступ ограничен", "доступ заблокирован", "just a moment")
 
 
-def normalize_url(raw: str) -> tuple[str, int] | None:
-    """Из любой ссылки/текста с карточкой Ozon -> (канонический url, sku).
+def normalize_url(raw: str) -> tuple[str, str, int] | None:
+    """Из ссылки/текста с карточкой -> (store, канонический url, sku).
 
-    Понимает /product/<slug>-<sku>/, /product/<sku> и старый
-    /context/detail/id/<sku> на доменах ozon.ru и ozone.ru. Короткие
-    редиректы (ozon.ru/t/<hash>) через регэксп не решаются — их
+    stores: 'ozon' (product/<slug>-<sku>, product/<sku>, context/detail/id,
+    домены ozon.ru|ozone.ru) и 'goldapple' (goldapple.ru/<id>-<slug>).
+    Короткие редиректы (ozon.ru/t/<hash>) через регэксп не решаются — их
     разворачивает OzonParser.resolve.
     """
+    m = _GA_URL_RE.search(raw)
+    if m:
+        sku = int(m.group(1))
+        return "goldapple", f"https://goldapple.ru/{sku}", sku
     m = _OLD_STYLE_RE.search(raw)
     if m:
         sku = int(m.group(1))
-        return f"https://www.ozon.ru/product/{sku}/", sku
+        return "ozon", f"https://www.ozon.ru/product/{sku}/", sku
     m = _PRODUCT_URL_RE.search(raw)
     if not m:
         return None
@@ -83,7 +91,7 @@ def normalize_url(raw: str) -> tuple[str, int] | None:
     if not sku_m:
         return None
     sku = int(sku_m.group(1))
-    return f"https://www.ozon.ru/product/{sku}/", sku
+    return "ozon", f"https://www.ozon.ru/product/{sku}/", sku
 
 
 def _to_int(number: str) -> int:
@@ -177,6 +185,29 @@ _PRICE_DOM_JS = """
 """
 
 
+# JS для Золотого Яблока: числа и «₽» у ЗЯ лежат в РАЗНЫХ текстовых узлах,
+# поэтому работаем по элементам [class*="_ga-price"]: берём только листовые
+# (без вложенных _ga-price — контейнеры дают дубли), исключаем старую цену
+# (_ga-price_old / strikethrough) и спан валюты. textContent листа содержит
+# «1 194 ₽» целиком.
+_GA_PRICE_JS = """
+() => {
+  const vals = new Set();
+  for (const el of document.querySelectorAll('[class*="_ga-price"]')) {
+    const cls = String(el.className || '');
+    if (cls.includes('_ga-price_old') || cls.includes('strikethrough') || cls.includes('__currency')) continue;
+    const inner = el.querySelector('[class*="_ga-price"]:not([class*="__currency"])');
+    if (inner) continue;  // контейнер — значения дадут его дети
+    const m = (el.textContent || '').match(/(\\d[\\d\\u00a0\\u202f\\u2009\\s]{0,12})\\s*₽/);
+    if (!m) continue;
+    const v = parseInt(m[1].replace(/\\D/g, ''), 10);
+    if (v >= 10) vals.add(v);
+  }
+  return Array.from(vals);
+}
+"""
+
+
 # ---------------------------------------------------------------------------
 # Браузер: обычный Chrome + Playwright over CDP
 # ---------------------------------------------------------------------------
@@ -254,25 +285,11 @@ class OzonParser:
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
         self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
-        # картинки и видео в ценах не участвуют, а весят дорого (CPU на рендер
-        # и трафик через VPN) — глушим ещё на уровне сети
-        await self._context.route(
-            "**/*", self._block_heavy_resources,
-        )
+        # ВАЖНО: НЕ регистрировать context.route() — при connect_over_cdp
+        # перехват запросов подвешивает часть загрузок (SPA магазина тогда
+        # не дорисовывает цены). Блокировка картинок отключена в пользу
+        # надёжности чтения цен.
         log.info("Подключён к Chrome по CDP (порт %d)", port)
-
-    @staticmethod
-    async def _block_heavy_resources(route) -> None:
-        if route.request.resource_type in ("image", "media"):
-            try:
-                await route.abort()
-            except Exception:  # noqa: BLE001 — страница могла уже закрыться
-                return
-        else:
-            try:
-                await route.continue_()
-            except Exception:  # noqa: BLE001
-                return
 
     async def close(self) -> None:
         for obj, name in ((self._browser, "browser"), (self._playwright, "playwright")):
@@ -305,12 +322,19 @@ class OzonParser:
         await self.start()
 
     async def fetch_prices(self, url: str) -> FetchResult:
-        """Открыть карточку и снять цены. До MAX_RETRIES попыток."""
+        """Открыть карточку и снять цены. До MAX_RETRIES попыток.
+
+        Диспетчер по магазину: ozon.ru -> Ozon-виджеты,
+        goldapple.ru -> GA-разметка (_ga-price)."""
+        if "goldapple.ru" in url.lower():
+            fetch = self._fetch_goldapple
+        else:
+            fetch = self._fetch_ozon
         async with self._lock:
             last: FetchResult | None = None
             for attempt in range(1, config.MAX_RETRIES + 1):
                 try:
-                    last = await self._fetch_once(url)
+                    last = await fetch(url)
                 except Exception as exc:  # браузер умер / таймаут навигации
                     log.warning("Попытка %d: ошибка %s: %r", attempt, url, exc)
                     last = FetchResult(url=url, error=f"{type(exc).__name__}: {exc}")
@@ -333,6 +357,12 @@ class OzonParser:
         return page
 
     async def _fetch_once(self, url: str) -> FetchResult:
+        """Совместимость: диспетчер по магазину."""
+        if "goldapple.ru" in url.lower():
+            return await self._fetch_goldapple(url)
+        return await self._fetch_ozon(url)
+
+    async def _fetch_ozon(self, url: str) -> FetchResult:
         page = await self._new_page()
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
@@ -372,6 +402,50 @@ class OzonParser:
                 await page.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    async def _fetch_goldapple(self, url: str) -> FetchResult:
+        page = await self._new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+            # блок цены у ЗЯ рендерится лениво: после гидрации SPA (~5 с) нужна
+            # прокрутка, иначе DOM так и не получит цены
+            await asyncio.sleep(5)
+            await page.mouse.wheel(0, 600)
+            await asyncio.sleep(2)
+
+            plain = card = None
+            deadline = time.monotonic() + config.CHALLENGE_WAIT_S
+            while time.monotonic() < deadline and plain is None and card is None:
+                plain, card = await self._extract_goldapple_prices(page)
+                if plain is None and card is None:
+                    await asyncio.sleep(1.5)
+
+            if plain is not None or card is not None:
+                return FetchResult(url=url, price=plain, card_price=card, title=await self._product_title(page))
+            title = await page.title()
+            return FetchResult(url=url, error=f"цена не найдена (title={title[:60]!r})")
+        finally:
+            try:
+                await page.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _extract_goldapple_prices(self, page) -> tuple[int | None, int | None]:
+        """Цены ЗЯ из DOM (_ga-price): (обычная, скидочная/клубная=минимальная).
+
+        Текстовые узлы под элементами с _ga-price; зачёркнутая старая цена
+        (_ga-price_old / strikethrough) отбрасывается. Из живых: min = клубная,
+        max = обычная. (None, None) — ещё не отрендерилось, вызывающий поллит.
+        """
+        try:
+            values = await page.evaluate(_GA_PRICE_JS)
+        except Exception:  # noqa: BLE001 — страница не готова
+            return None, None
+        if not values:
+            return None, None
+        if len(values) == 1:
+            return values[0], None
+        return max(values), min(values)
 
     async def _extract_dom_prices(self, page) -> tuple[int | None, int | None]:
         """Цены из DOM: (обычная, карточная).
