@@ -190,25 +190,35 @@ _PRICE_DOM_JS = """
 """
 
 
-# JS для Золотого Яблока: числа и «₽» у ЗЯ лежат в РАЗНЫХ текстовых узлах,
-# поэтому работаем по элементам [class*="_ga-price"]: берём только листовые
-# (без вложенных _ga-price — контейнеры дают дубли), исключаем старую цену
-# (_ga-price_old / strikethrough) и спан валюты. textContent листа содержит
-# «1 194 ₽» целиком.
+# JS для Золотого Яблока: снимаем цены ТОЛЬКО из главного ценового блока
+# страницы ([class*="_ga-pdp-price"]) — на 404-страницах и в блоках
+# рекомендаций/бонусов есть чужие _ga-price, мусорить они больше не могут.
+# Числа и «₽» у ЗЯ лежат в разных текстовых узлах — работаем по textContent
+# листовых элементов; валютный спан и старая зачёркнутая цена исключаются.
 _GA_PRICE_JS = """
 () => {
-  const vals = new Set();
-  for (const el of document.querySelectorAll('[class*="_ga-price"]')) {
-    const cls = String(el.className || '');
-    if (cls.includes('_ga-price_old') || cls.includes('strikethrough') || cls.includes('__currency')) continue;
-    const inner = el.querySelector('[class*="_ga-price"]:not([class*="__currency"])');
-    if (inner) continue;  // контейнер — значения дадут его дети
-    const m = (el.textContent || '').match(/(\\d[\\d\\u00a0\\u202f\\u2009\\s]{0,12})\\s*₽/);
-    if (!m) continue;
-    const v = parseInt(m[1].replace(/\\D/g, ''), 10);
-    if (v >= 10) vals.add(v);
+  const collect = (root) => {
+    const vals = new Set();
+    for (const el of root.querySelectorAll('[class*="_ga-price"]')) {
+      const cls = String(el.className || '');
+      if (cls.includes('_ga-price_old') || cls.includes('strikethrough') || cls.includes('__currency')) continue;
+      if (el.querySelector('[class*="_ga-price"]:not([class*="__currency"])')) continue;
+      const text = (el.textContent || '').trim();
+      if (text.startsWith('+')) continue;  // «+156 ₽» — бонусы, не цена
+      const m = text.match(/(\\d[\\d\\u00a0\\u202f\\u2009\\s]{0,12})\\s*₽/);
+      if (!m) continue;
+      const v = parseInt(m[1].replace(/\\D/g, ''), 10);
+      if (v >= 10) vals.add(v);
+    }
+    return Array.from(vals);
+  };
+  const blocks = document.querySelectorAll('[class*="_ga-pdp-price"]');
+  if (blocks.length) {
+    const out = new Set();
+    for (const b of blocks) for (const v of collect(b)) out.add(v);
+    if (out.size) return Array.from(out);
   }
-  return Array.from(vals);
+  return collect(document.body);
 }
 """
 
