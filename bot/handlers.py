@@ -21,9 +21,24 @@ from .notifier import effective_price
 from .ozon import normalize_url
 from .runner import resolve_single, run_check_all, run_single
 
+from aiogram.exceptions import TelegramNetworkError
+
 log = logging.getLogger(__name__)
 
 router = Router()
+
+
+async def _answer_with_retry(message: Message, text: str, attempts: int = 3, delay: float = 8.0):
+    """Ответ с ретраями на сетевые провалы. None — сеть так и не поднялась
+    (товар уже в базе, цену возьмёт ближайший плановый прогон)."""
+    for attempt in range(attempts):
+        try:
+            return await message.answer(text)
+        except TelegramNetworkError:
+            if attempt < attempts - 1:
+                await asyncio.sleep(delay)
+    log.warning("Не доставил сообщение после %d попыток", attempts)
+    return None
 
 HELP_TEXT = (
     "Я слежу за ценами на Ozon 🛰\n\n"
@@ -125,7 +140,10 @@ async def cmd_check(message: Message, bot: Bot) -> None:
         await message.answer("Твой список пуст — добавь сначала товары.")
         return
     est = int(len(products) * (sum(config.DELAY_BETWEEN_PRODUCTS) / 2 + 8) / 60) + 1
-    await message.answer(f"Проверяю {len(products)} товаров, это займёт ~{est} мин. При снижении напишу.")
+    try:
+        await message.answer(f"Проверяю {len(products)} товаров, это займёт ~{est} мин. При снижении напишу.")
+    except TelegramNetworkError:
+        pass  # сеть моргнула — проверку всё равно делаем, сводка уйдёт позже
     asyncio.create_task(_run_and_report(bot, message.chat.id))
 
 
@@ -203,21 +221,9 @@ async def add_product(message: Message, bot: Bot) -> None:
     product = db.add_product(store, url, sku, title=None, orig_url=sent_link)
     db.subscribe(chat_id, product.id)
 
-    status = await message.answer("Открываю карточку, смотрю цену…")
+    # товар уже в базе; сетевой провал при ответе не должен сорвать проверку
+    status = await _answer_with_retry(message, "Открываю карточку, смотрю цену…")
     result, product = await run_single(bot, product)
-
-    if result == "blocked":
-        await status.edit_text(
-            "Добавил в твой список, но антибот сейчас не пустил 🛡\n"
-            "Цену возьму при следующем прогоне (или попробуй /check через пару минут)."
-        )
-        return
-    if result == "error":
-        await status.edit_text(
-            "Добавил в твой список, но цену прочитать не удалось 😕\n"
-            f"{url}\nЕсли товар сняли с продажи — /del и удали."
-        )
-        return
 
     last = db.get_last_point(product.id)
     price_str = "цена не отображается"
@@ -228,10 +234,25 @@ async def add_product(message: Message, bot: Bot) -> None:
                       else " в клубе" if last.card_price else "")
             price_str = f"{eff:,} ₽".replace(",", " ") + suffix
     title = product.title or "(название уточню при следующей проверке)"
-    await status.edit_text(
-        f"✅ Добавил в твой список:\n{title}\nСейчас: {price_str}\n\n"
-        f"Уведомлю, когда подешевеет. /list — твой список."
-    )
+
+    if result == "blocked":
+        final = ("Добавил в твой список, но антибот сейчас не пустил 🛡\n"
+                 "Цену возьму при следующем прогоне (или попробуй /check через пару минут).")
+    elif result == "error":
+        final = ("Добавил в твой список, но цену прочитать не удалось 😕\n"
+                 f"{url}\nЕсли товар сняли с продажи — /del и удали.")
+    else:
+        final = (f"✅ Добавил в твой список:\n{title}\nСейчас: {price_str}\n\n"
+                 f"Уведомлю, когда подешевеет. /list — твой список.")
+
+    if status is not None:
+        try:
+            await status.edit_text(final)
+            return
+        except Exception:  # noqa: BLE001 — редактирование упало, пошлём новым сообщением
+            pass
+    if await _answer_with_retry(message, final) is None:
+        log.warning("Добавлен %s (sku %s), но ответ не доставлен — сеть была недоступна", store, sku)
 
 
 def setup_router() -> Router:
