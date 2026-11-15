@@ -39,9 +39,10 @@ _SKU_RE = re.compile(r"(\d{5,})\s*/?\s*$")
 _OLD_STYLE_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:ozon|ozone)\.ru/context/detail/id/(\d{5,})", re.IGNORECASE
 )
-# Золотое Яблоко: goldapple.ru/19000007126-slug или goldapple.ru/19000007126
+# Золотое Яблоко: goldapple.ru/19000260312-macximal-matte-lipstick (слаг
+# ОБЯЗАТЕЛЕН — bare id у ЗЯ отдаёт 404)
 _GA_URL_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?goldapple\.ru/(\d{6,15})(?:[/-]|$|/\s)", re.IGNORECASE
+    r"(?:https?://)?(?:www\.)?goldapple\.ru/(\d{6,15}(?:-[a-z0-9-]+)?)", re.IGNORECASE
 )
 
 # Число с разделителями разрядов (пробел, узкий пробел, nbsp) и знаком рубля
@@ -65,6 +66,9 @@ PRICE_JSON_PATTERNS = [
 # Признаки страницы-блока (антибот / ограничение доступа)
 TITLE_BLOCK_MARKERS = ("antibot", "доступ ограничен", "доступ заблокирован", "just a moment")
 BODY_BLOCK_MARKERS = ("antibot challenge", "доступ ограничен", "доступ заблокирован", "just a moment")
+# 404-страницы магазинов: цены с них не снимаем (там виджеты «рекомендаций»
+# с чужими ценами), названия такие не сохраняем
+NOT_FOUND_MARKERS = ("страница не найдена", "упс", "page not found", "404")
 
 
 def normalize_url(raw: str) -> tuple[str, str, int] | None:
@@ -77,8 +81,9 @@ def normalize_url(raw: str) -> tuple[str, str, int] | None:
     """
     m = _GA_URL_RE.search(raw)
     if m:
-        sku = int(m.group(1))
-        return "goldapple", f"https://goldapple.ru/{sku}", sku
+        token = m.group(1)  # «19000260312-macximal-matte-lipstick» или «19000260312»
+        sku = int(token.split("-", 1)[0])
+        return "goldapple", f"https://goldapple.ru/{token}", sku
     m = _OLD_STYLE_RE.search(raw)
     if m:
         sku = int(m.group(1))
@@ -146,7 +151,7 @@ def extract_prices_from_html(html: str) -> tuple[int | None, int | None]:
 def looks_like_block(title: str, html: str) -> bool:
     """Похоже ли на страницу-блок (вызывается уже ПОСЛЕ того, как цены нет)."""
     title_lower = (title or "").lower()
-    if any(marker in title_lower for marker in TITLE_BLOCK_MARKERS):
+    if any(marker in title_lower for marker in TITLE_BLOCK_MARKERS or NOT_FOUND_MARKERS):
         return True
     body_head = html[:20_000].lower()
     return any(marker in body_head for marker in BODY_BLOCK_MARKERS)
@@ -413,6 +418,15 @@ class OzonParser:
             await page.mouse.wheel(0, 600)
             await asyncio.sleep(2)
 
+            # 404-страница ЗЯ содержит виджеты рекомендаций с чужими ценами —
+            # распознаём её раньше экстрактора
+            page_title = (await page.title() or "").lower()
+            h1 = await page.query_selector("h1")
+            h1_text = ((await h1.text_content()) or "").strip().lower() if h1 else ""
+            if any(marker in page_title or marker in h1_text for marker in NOT_FOUND_MARKERS):
+                log.warning("Страница не найдена (title=%r): %s", page_title[:60], url)
+                return FetchResult(url=url, error="страница не найдена — проверь ссылку на товар")
+
             plain = card = None
             deadline = time.monotonic() + config.CHALLENGE_WAIT_S
             while time.monotonic() < deadline and plain is None and card is None:
@@ -539,7 +553,7 @@ class OzonParser:
             await asyncio.sleep(1.0)
         try:
             title = (await page.title() or "").strip()
-            if title and not any(m in title.lower() for m in TITLE_BLOCK_MARKERS):
+            if title and not any(m in title.lower() for m in TITLE_BLOCK_MARKERS or NOT_FOUND_MARKERS):
                 return title
         except Exception:  # noqa: BLE001
             pass

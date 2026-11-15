@@ -55,13 +55,13 @@ def test_normalize_url_short_redirect_not_resolvable_inline():
 
 def test_normalize_url_goldapple_slug():
     url = "https://goldapple.ru/19000007126-skin-guardian"
-    assert normalize_url(url) == ("goldapple", "https://goldapple.ru/19000007126", 19000007126)
+    assert normalize_url(url) == ("goldapple", "https://goldapple.ru/19000007126-skin-guardian", 19000007126)  # слаг обязателен
 
 
 def test_normalize_url_goldapple_plain_id():
     store, url, sku = normalize_url("https://goldapple.ru/89270100006-atoderm?utm=x")
     assert store == "goldapple"
-    assert url == f"https://goldapple.ru/{sku}"  # канон: только id, без слага и utm
+    assert url == f"https://goldapple.ru/{sku}-atoderm"  # слаг сохраняется, utm отброшен
     assert 10 ** 10 <= sku < 10 ** 11            # 11-значный id ЗЯ
 
 
