@@ -255,5 +255,17 @@ async def add_product(message: Message, bot: Bot) -> None:
         log.warning("Добавлен %s (sku %s), но ответ не доставлен — сеть была недоступна", store, sku)
 
 
+def _price_suffix(store: str, card_price: int | None) -> str:
+    """Подпись скидочной цены по магазину."""
+    if not card_price:
+        return ""
+    if store == "ozon":
+        return " с Ozon Картой"
+    if store == "goldapple":
+        return " в клубе"
+    if store == "wildberries":
+        return " с WB Кошельком"
+    return ""
+
 def setup_router() -> Router:
     return router

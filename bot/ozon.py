@@ -44,6 +44,11 @@ _OLD_STYLE_RE = re.compile(
 _GA_URL_RE = re.compile(
     r"(?:https?://)?(?:www\.)?goldapple\.ru/(\d{6,15}(?:-[a-z0-9-]+)?)", re.IGNORECASE
 )
+# Wildberries: wildberries.ru/catalog/604961294/detail.aspx и короткая wb.ru/604961294
+_WB_CATALOG_RE = re.compile(
+    r"(?:www\.)?(?:wildberries|wb)\.ru/catalog/(\d{5,})", re.IGNORECASE
+)
+_WB_SHORT_RE = re.compile(r"(?:https?://)?(?:www\.)?wb\.ru/(\d{5,})(?:[/?#]|$)", re.IGNORECASE)
 
 # Число с разделителями разрядов (пробел, узкий пробел, nbsp) и знаком рубля
 _PRICE_IN_TEXT_RE = re.compile(r"(\d[\d   \s]{0,15})\s*₽")
@@ -75,10 +80,19 @@ def normalize_url(raw: str) -> tuple[str, str, int] | None:
     """Из ссылки/текста с карточкой -> (store, канонический url, sku).
 
     stores: 'ozon' (product/<slug>-<sku>, product/<sku>, context/detail/id,
-    домены ozon.ru|ozone.ru) и 'goldapple' (goldapple.ru/<id>-<slug>).
+    домены ozon.ru|ozone.ru), 'goldapple' (goldapple.ru/<id>-<slug>) и
+    'wildberries' (catalog/<id>, wb.ru/<id>).
     Короткие редиректы (ozon.ru/t/<hash>) через регэксп не решаются — их
     разворачивает OzonParser.resolve.
     """
+    m = _WB_CATALOG_RE.search(raw)
+    if m:
+        sku = int(m.group(1))
+        return "wildberries", f"https://www.wildberries.ru/catalog/{sku}/detail.aspx", sku
+    m = _WB_SHORT_RE.search(raw)
+    if m:
+        sku = int(m.group(1))
+        return "wildberries", f"https://www.wildberries.ru/catalog/{sku}/detail.aspx", sku
     m = _GA_URL_RE.search(raw)
     if m:
         token = m.group(1)  # «19000260312-macximal-matte-lipstick» или «19000260312»
@@ -223,6 +237,43 @@ _GA_PRICE_JS = """
 """
 
 
+# JS для Wildberries: листовые элементы с «N ₽» внутри главного блока
+# priceBlock (карусели рекомендаций с чужими ценами остаются за скобками).
+# Помечаем кошелёк (класс wallet — минимальная цена) и зачёркивание
+# (computed style) — старую цену.
+_WB_PRICE_JS = """
+() => {
+  const collect = (root) => {
+    const out = [];
+    for (const el of root.querySelectorAll('*')) {
+      if (el.querySelector('[class*="price" i]')) continue;
+      const t = (el.textContent || '').trim();
+      const m = t.match(/^(\\d[\\d\\u00a0\\u202f\\u2009 ]{0,10})₽$/);
+      if (!m) continue;
+      let struck = false, wallet = false, el2 = el;
+      while (el2) {
+        const cls = String(el2.className || '');
+        if (cls.toLowerCase().includes('wallet')) wallet = true;
+        const cs = getComputedStyle(el2);
+        if (String(cs.textDecorationLine || '').includes('line-through')) struck = true;
+        el2 = el2.parentElement;
+      }
+      const v = parseInt(m[1].replace(/[\\u00a0\\u202f\\u2009 ]/g, ''), 10);
+      if (v >= 10) out.push({v: v, struck: struck, wallet: wallet});
+    }
+    return out;
+  };
+  const blocks = document.querySelectorAll('[class*="priceBlock"]');
+  if (blocks.length) {
+    const merged = [];
+    for (const b of blocks) merged.push(...collect(b));
+    if (merged.length) return merged;
+  }
+  return collect(document.body);
+}
+"""
+
+
 # ---------------------------------------------------------------------------
 # Браузер: обычный Chrome + Playwright over CDP
 # ---------------------------------------------------------------------------
@@ -343,6 +394,8 @@ class OzonParser:
         goldapple.ru -> GA-разметка (_ga-price)."""
         if "goldapple.ru" in url.lower():
             fetch = self._fetch_goldapple
+        elif "wildberries.ru" in url.lower() or "//wb.ru" in url.lower():
+            fetch = self._fetch_wildberries
         else:
             fetch = self._fetch_ozon
         async with self._lock:
@@ -375,7 +428,60 @@ class OzonParser:
         """Совместимость: диспетчер по магазину."""
         if "goldapple.ru" in url.lower():
             return await self._fetch_goldapple(url)
+        if "wildberries.ru" in url.lower() or "//wb.ru" in url.lower():
+            return await self._fetch_wildberries(url)
         return await self._fetch_ozon(url)
+
+    async def _fetch_wildberries(self, url: str) -> FetchResult:
+        page = await self._new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+            await asyncio.sleep(5)  # SPA WB тяжёлая — цены приходят клиентом
+
+            data = None
+            deadline = time.monotonic() + config.CHALLENGE_WAIT_S
+            while time.monotonic() < deadline:
+                try:
+                    data = await page.evaluate(_WB_PRICE_JS)
+                except Exception:  # noqa: BLE001 — страница не готова
+                    data = None
+                if data:
+                    break
+                await asyncio.sleep(1.5)
+
+            if not data:
+                title = await page.title()
+                return FetchResult(url=url, error=f"цена не найдена (title={title[:60]!r})")
+
+            wallet = [d["v"] for d in data if d["wallet"] and not d["struck"]]
+            plain_live = [d["v"] for d in data if not d["struck"] and not d["wallet"]]
+            card = min(wallet) if wallet else None
+            # старая зачёркнутая всегда больше текущих; максимум живых = обычная
+            plain = max(plain_live) if plain_live else card
+            if plain is None or (card is not None and plain < card):
+                plain, card = card, plain  # wallets без обычной цены
+            title = await self._wb_title(page)
+            return FetchResult(url=url, price=plain, card_price=card, title=title)
+        finally:
+            try:
+                await page.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _wb_title(self, page) -> str | None:
+        """Название WB: h1 у них — рейтинг, берём <title> до служебных хвостов."""
+        try:
+            title = (await page.title() or "").strip()
+            for marker in ("купить за", "— купить", "купить в", "/ WB", "Wildberries"):
+                idx = title.find(marker)
+                if idx > 5:
+                    title = title[:idx].strip(" —/ ")
+                    break
+            if title:
+                return title
+        except Exception:  # noqa: BLE001
+            pass
+        return await self._product_title(page)
 
     async def _fetch_ozon(self, url: str) -> FetchResult:
         page = await self._new_page()

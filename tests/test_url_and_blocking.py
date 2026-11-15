@@ -53,7 +53,23 @@ def test_normalize_url_short_redirect_not_resolvable_inline():
     assert normalize_url("https://ozon.ru/t/Xk2Pq9") is None
 
 
-def test_normalize_url_goldapple_slug():
+def test_normalize_url_wb_catalog():
+    url = "https://www.wildberries.ru/catalog/604961294/detail.aspx"
+    assert normalize_url(url) == ("wildberries", "https://www.wildberries.ru/catalog/604961294/detail.aspx", 604961294)
+
+
+def test_normalize_url_wb_catalog_with_query():
+    url = "https://www.wildberries.ru/catalog/16530335/detail.aspx?target=from_search"
+    assert normalize_url(url) == ("wildberries", "https://www.wildberries.ru/catalog/16530335/detail.aspx", 16530335)
+
+
+def test_normalize_url_wb_short():
+    assert normalize_url("https://wb.ru/90486173") == ("wildberries", "https://www.wildberries.ru/catalog/90486173/detail.aspx", 90486173)
+
+
+def test_normalize_url_wb_rejects_search_page():
+    # search.aspx — не карточка
+    assert normalize_url("https://www.wildberries.ru/catalog/0/search.aspx?search=наушники") is None
     url = "https://goldapple.ru/19000007126-skin-guardian"
     assert normalize_url(url) == ("goldapple", "https://goldapple.ru/19000007126-skin-guardian", 19000007126)  # слаг обязателен
 
