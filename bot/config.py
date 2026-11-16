@@ -38,6 +38,8 @@ PRODUCT_CONCURRENCY = int(os.getenv("PRODUCT_CONCURRENCY", "3"))
 GA_PRODUCT_CONCURRENCY = int(os.getenv("GA_PRODUCT_CONCURRENCY", "2"))
 # Разброс старта задач, сек (чтобы запросы не начинались одновременно)
 PRODUCT_STAGGER = float(os.getenv("PRODUCT_STAGGER", "0.8"))
+# Закончившиеся товары перепроверяются раз в столько плановых прогонов
+OOS_RECHECK_EVERY = int(os.getenv("OOS_RECHECK_EVERY", "6"))
 
 # --- Парсер: задержки и ретраи ---
 PAGE_TIMEOUT_MS = 30_000          # навигация по карточке

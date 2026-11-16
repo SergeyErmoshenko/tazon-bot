@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 
 from aiogram import Bot
 
@@ -139,21 +140,44 @@ async def check_product(bot: Bot, product: db.Product) -> str:
     return "drop" if drops else "ok"
 
 
+_scheduled_runs = 0  # счётчик плановых прогонов: закончившиеся товары
+                     # перепроверяем раз в OOS_RECHECK_EVERY прогонов
+
+
 async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
     """Прогон: товары пользователя (chat_id) или все (расписание).
 
     Chrome терминируется в finally — он нужен только на время прогона
     (свежий subprocess проходит антибот так же, см. CLAUDE.md).
     """
+    global _scheduled_runs
     async with _run_lock:
         try:
             products = db.list_user_products(chat_id) if chat_id else db.list_all_products()
             if not products:
                 return "Список товаров пуст — кинь мне ссылку на товар Ozon, чтобы добавить."
 
+            # закончившиеся товары открывать каждый час незачем (редирект на
+            # поиск детерминирован) — перепроверяем наличие раз в 6 прогонов;
+            # ручной /check проверяет всё всегда
+            include_out = chat_id is not None
+            skipped_out = 0
+            if not include_out:
+                _scheduled_runs += 1
+                include_out = _scheduled_runs % config.OOS_RECHECK_EVERY == 0
+            if not include_out:
+                in_stock = []
+                for p in products:
+                    if db.is_out(p.id):
+                        skipped_out += 1
+                    else:
+                        in_stock.append(p)
+                products = in_stock
+
             stats = {"ok": 0, "drop": 0, "blocked": 0, "error": 0, "out": 0}
 
             async def check_one(idx: int, product: db.Product) -> None:
+                start = time.monotonic()
                 # разброс старта, чтобы запросы не начинались одновременно
                 await asyncio.sleep(idx * config.PRODUCT_STAGGER)
                 try:
@@ -162,6 +186,7 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
                     log.exception("Прогон по товару %s упал", product.url)
                     status = "error"
                 stats[status] = stats.get(status, 0) + 1
+                log.info("  sku %s: %s за %.1f с", product.sku, status, time.monotonic() - start)
 
             # параллельные вкладки Chrome: лимит параллельности держит
             # семафор парсера (3 для Ozon/WB, 2 для ЗЯ)
@@ -175,6 +200,8 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
                 f"антибот {stats.get('blocked', 0)}, "
                 f"ошибки {stats.get('error', 0)}"
             )
+            if skipped_out:
+                summary += f"\n🚫 Пропущены закончившиеся (перепроверка через {config.OOS_RECHECK_EVERY - _scheduled_runs % config.OOS_RECHECK_EVERY} прог.): {skipped_out}"
             log.info(summary)
             return summary
         finally:

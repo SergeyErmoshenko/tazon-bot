@@ -431,8 +431,8 @@ class OzonParser:
                     except Exception as restart_exc:  # браузер вообще не поднимается
                         log.error("Chrome не перезапускается: %r", restart_exc)
                         return FetchResult(url=url, error=f"chrome not starting: {restart_exc}")
-            if last is not None and last.ok:
-                return last
+            if last is not None and (last.ok or last.out_of_stock):
+                return last  # out_of_stock не ретраим — редирект детерминирован
             if attempt < config.MAX_RETRIES:
                 await asyncio.sleep(random.uniform(*config.RETRY_DELAY))
         return last or FetchResult(url=url, error="no attempts")
