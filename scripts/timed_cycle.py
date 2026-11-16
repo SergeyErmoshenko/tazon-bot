@@ -12,6 +12,11 @@ from bot import config, runner  # noqa: E402
 
 
 async def main() -> None:
+    import logging
+    from bot.main import setup_logging  # type: ignore[attr-defined]
+    import logging
+    setup_logging()
+    logging.getLogger().setLevel(logging.INFO)
     config.settings = config.load_settings()
     bot = Bot(token=config.settings.bot_token)
     t0 = time.monotonic()

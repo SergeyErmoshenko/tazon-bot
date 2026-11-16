@@ -33,11 +33,11 @@ GA_PROFILE_DIR = DATA_DIR / "ga-profile"
 
 # Параллельные вкладки Chrome при прогоне (больше = быстрее, но антибот
 # магазинов не любит шквал одновременных запросов с одного профиля)
-PRODUCT_CONCURRENCY = int(os.getenv("PRODUCT_CONCURRENCY", "3"))
+PRODUCT_CONCURRENCY = int(os.getenv("PRODUCT_CONCURRENCY", "4"))
 # ЗЯ капризнее — ей меньше
 GA_PRODUCT_CONCURRENCY = int(os.getenv("GA_PRODUCT_CONCURRENCY", "2"))
 # Разброс старта задач, сек (чтобы запросы не начинались одновременно)
-PRODUCT_STAGGER = float(os.getenv("PRODUCT_STAGGER", "0.8"))
+PRODUCT_STAGGER = float(os.getenv("PRODUCT_STAGGER", "0.25"))
 # Закончившиеся товары перепроверяются раз в столько плановых прогонов
 OOS_RECHECK_EVERY = int(os.getenv("OOS_RECHECK_EVERY", "6"))
 
