@@ -415,9 +415,12 @@ class OzonParser:
             fetch = self._fetch_wildberries
         else:
             fetch = self._fetch_ozon
-        async with self._sem:
-            last: FetchResult | None = None
-            for attempt in range(1, config.MAX_RETRIES + 1):
+        last: FetchResult | None = None
+        for attempt in range(1, config.MAX_RETRIES + 1):
+            # слот параллельности держим только на открытие страницы и чтение;
+            # кулдаун между попытками — вне слота, чтобы не блокировать другие
+            # товары (иначе «все вкладки закрыты, а прогон стоит»)
+            async with self._sem:
                 try:
                     last = await fetch(url)
                 except Exception as exc:  # браузер умер / таймаут навигации
@@ -428,11 +431,11 @@ class OzonParser:
                     except Exception as restart_exc:  # браузер вообще не поднимается
                         log.error("Chrome не перезапускается: %r", restart_exc)
                         return FetchResult(url=url, error=f"chrome not starting: {restart_exc}")
-                if last is not None and last.ok:
-                    return last
-                if attempt < config.MAX_RETRIES:
-                    await asyncio.sleep(random.uniform(*config.RETRY_DELAY))
-            return last or FetchResult(url=url, error="no attempts")
+            if last is not None and last.ok:
+                return last
+            if attempt < config.MAX_RETRIES:
+                await asyncio.sleep(random.uniform(*config.RETRY_DELAY))
+        return last or FetchResult(url=url, error="no attempts")
 
     async def _new_page(self):
         await self.start()
@@ -453,10 +456,13 @@ class OzonParser:
         page = await self._new_page()
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
-            await asyncio.sleep(5)  # SPA WB тяжёлая — цены приходят клиентом
 
+            # poll-first: цены приходят клиентом, пробуем сразу, прокрутка —
+            # если через пару секунд ещё пусто; вкладка закрывается сразу
+            # после найденных цен
             data = None
             deadline = time.monotonic() + config.CHALLENGE_WAIT_S
+            wheeled = False
             while time.monotonic() < deadline:
                 try:
                     data = await page.evaluate(_WB_PRICE_JS)
@@ -464,7 +470,10 @@ class OzonParser:
                     data = None
                 if data:
                     break
-                await asyncio.sleep(1.5)
+                if not wheeled and time.monotonic() > deadline - (config.CHALLENGE_WAIT_S - 3):
+                    await page.mouse.wheel(0, 400)
+                    wheeled = True
+                await asyncio.sleep(1.0)
 
             if not data:
                 title = await page.title()
@@ -575,12 +584,6 @@ class OzonParser:
                 log.warning("ЗЯ челлендж не пройден за 75 с: %s", url)
                 return FetchResult(url=url, blocked=True)
 
-            # блок цены у ЗЯ рендерится лениво: после гидрации SPA нужна
-            # прокрутка, иначе DOM так и не получит цены
-            await asyncio.sleep(5)
-            await page.mouse.wheel(0, 600)
-            await asyncio.sleep(2)
-
             # 404-страница ЗЯ содержит виджеты рекомендаций с чужими ценами —
             # распознаём её раньше экстрактора
             page_title = (await page.title() or "").lower()
@@ -590,12 +593,19 @@ class OzonParser:
                 log.warning("Страница не найдена (title=%r): %s", page_title[:60], url)
                 return FetchResult(url=url, error="страница не найдена — проверь ссылку на товар")
 
+            # poll-first: пробуем читать сразу; прокрутка — если через 3 с
+            # пусто (блок цены рендерится лениво); вкладка закрывается сразу
+            # после найденных цен
             plain = card = None
             deadline = time.monotonic() + config.CHALLENGE_WAIT_S
+            wheeled = False
             while time.monotonic() < deadline and plain is None and card is None:
                 plain, card = await self._extract_goldapple_prices(page)
                 if plain is None and card is None:
-                    await asyncio.sleep(1.5)
+                    if not wheeled and time.monotonic() > deadline - (config.CHALLENGE_WAIT_S - 3):
+                        await page.mouse.wheel(0, 600)
+                        wheeled = True
+                    await asyncio.sleep(1.0)
 
             if plain is not None or card is not None:
                 return FetchResult(url=url, price=plain, card_price=card, title=await self._product_title(page))
