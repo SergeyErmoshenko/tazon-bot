@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from pathlib import Path
 from dataclasses import dataclass
 
 from . import config
@@ -303,9 +304,15 @@ def _cdp_alive(port: int) -> bool:
 
 
 class OzonParser:
-    """Chrome запускается субпроцессом и живёт между прогонами; Playwright — сбоку."""
+    """Chrome запускается субпроцессом и живёт между прогонами; Playwright — сбоку.
 
-    def __init__(self) -> None:
+    Для ЗЯ отдельные порт и профиль (config.GA_*): её антибот «спаливает»
+    общий профиль, свежий посетитель челлендж проходит.
+    """
+
+    def __init__(self, cdp_port: int | None = None, profile_dir: Path | None = None) -> None:
+        self._port = cdp_port or config.CDP_PORT
+        self._profile_dir = profile_dir or config.BROWSER_PROFILE_DIR
         self._playwright = None
         self._browser = None
         self._context = None
@@ -317,17 +324,18 @@ class OzonParser:
             return
         from playwright.async_api import async_playwright
 
-        config.BROWSER_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        port = config.CDP_PORT
+        self._profile_dir.mkdir(parents=True, exist_ok=True)
+        port = self._port
 
         if not _cdp_alive(port):
-            log.info("Запускаю Chrome: %s (profile=%s)", config.CHROME_PATH, config.BROWSER_PROFILE_DIR)
+            log.info("Запускаю Chrome: %s (profile=%s, port=%d)",
+                     config.CHROME_PATH, self._profile_dir, port)
             creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             self._proc = subprocess.Popen(
                 [
                     config.CHROME_PATH,
                     f"--remote-debugging-port={port}",
-                    f"--user-data-dir={config.BROWSER_PROFILE_DIR}",
+                    f"--user-data-dir={self._profile_dir}",
                     "--start-minimized",
                     # фоновый жор режем: без фоновой сети/синхронизации/обновлений
                     "--disable-background-networking",
@@ -540,7 +548,26 @@ class OzonParser:
         page = await self._new_page()
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
-            # блок цены у ЗЯ рендерится лениво: после гидрации SPA (~5 с) нужна
+
+            # ЗЯ иногда встречает челленджем «Gold Apple - checking device»:
+            # JS-проверка ставит cookie, после чего нужна ПЕРЕЗАГРУЗКА страницы.
+            # Ждём до 75 с, периодически перезагружая, пока title не сменится.
+            challenge_deadline = time.monotonic() + 75
+            next_reload = time.monotonic() + 18
+            while time.monotonic() < challenge_deadline:
+                title_now = (await page.title() or "").lower()
+                if "checking device" not in title_now:
+                    break
+                if time.monotonic() >= next_reload:
+                    log.info("ЗЯ челлендж, перезагрузка: %s", url)
+                    await page.reload(wait_until="domcontentloaded")
+                    next_reload = time.monotonic() + 18
+                await asyncio.sleep(2)
+            else:
+                log.warning("ЗЯ челлендж не пройден за 75 с: %s", url)
+                return FetchResult(url=url, blocked=True)
+
+            # блок цены у ЗЯ рендерится лениво: после гидрации SPA нужна
             # прокрутка, иначе DOM так и не получит цены
             await asyncio.sleep(5)
             await page.mouse.wheel(0, 600)

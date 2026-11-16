@@ -26,6 +26,10 @@ CHROME_PATH = os.getenv(
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
 )
 CDP_PORT = int(os.getenv("CDP_PORT", "9222"))
+# ЗЯ со временем «спаливает» общий профиль (свой antibot checking-device) —
+# для неё отдельный профиль и порт: свежий посетитель челлендж проходит
+GA_CDP_PORT = int(os.getenv("GA_CDP_PORT", "9333"))
+GA_PROFILE_DIR = DATA_DIR / "ga-profile"
 
 # --- Парсер: задержки и ретраи ---
 PAGE_TIMEOUT_MS = 30_000          # навигация по карточке

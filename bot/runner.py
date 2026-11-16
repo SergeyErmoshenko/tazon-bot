@@ -20,14 +20,28 @@ from .ozon import OzonParser
 log = logging.getLogger(__name__)
 
 _run_lock = asyncio.Lock()
-_parser: OzonParser | None = None
+_parsers: dict[str, OzonParser] = {}
 
 
-def get_parser() -> OzonParser:
-    global _parser
-    if _parser is None:
-        _parser = OzonParser()
-    return _parser
+def get_parser(store: str = "ozon") -> OzonParser:
+    """Парсер на магазин: ЗЯ ходит через отдельный профиль (config.GA_*),
+    остальные — через общий."""
+    if store not in _parsers:
+        if store == "goldapple":
+            _parsers[store] = OzonParser(cdp_port=config.GA_CDP_PORT, profile_dir=config.GA_PROFILE_DIR)
+        else:
+            _parsers[store] = OzonParser()
+    return _parsers[store]
+
+
+async def close_parsers() -> None:
+    """Погасить все Chrome-инстансы (в конце прогона)."""
+    for parser in _parsers.values():
+        await parser.close()
+
+
+def _escape_html(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _chart_keyboard(product_id: int) -> InlineKeyboardMarkup:
@@ -56,7 +70,7 @@ async def _notify_subscribers(bot: Bot, product: db.Product, text: str,
 
 async def check_product(bot: Bot, product: db.Product) -> str:
     """Проверить один товар: записать точку, уведомить подписчиков о снижении."""
-    parser = get_parser()
+    parser = get_parser(product.store)
     result = await parser.fetch_prices(product.url)
 
     if result.out_of_stock:
@@ -158,7 +172,7 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
             log.info(summary)
             return summary
         finally:
-            await get_parser().close()
+            await close_parsers()
 
 
 async def resolve_single(raw_url: str) -> tuple[str, int] | None:
@@ -167,7 +181,7 @@ async def resolve_single(raw_url: str) -> tuple[str, int] | None:
         try:
             return await get_parser().resolve(raw_url)
         finally:
-            await get_parser().close()
+            await close_parsers()
 
 
 async def run_single(bot: Bot, product: db.Product) -> tuple[str, db.Product]:
@@ -180,10 +194,10 @@ async def run_single(bot: Bot, product: db.Product) -> tuple[str, db.Product]:
             status = await check_product(bot, product)
             product = db.get_product(product.id) or product
             if status == "ok" and not product.title:
-                title = await get_parser().fetch_title(product.url)
+                title = await get_parser(product.store).fetch_title(product.url)
                 if title:
                     db.update_title(product.id, title)
                     product = db.get_product(product.id) or product
             return status, product
         finally:
-            await get_parser().close()
+            await close_parsers()
