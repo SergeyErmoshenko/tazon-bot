@@ -45,7 +45,11 @@ async def _notify_subscribers(bot: Bot, product: db.Product, text: str,
     markup = _chart_keyboard(product.id) if with_chart_button else None
     for chat_id in db.subscribers(product.id):
         try:
-            await bot.send_message(chat_id, text, disable_web_page_preview=True, reply_markup=markup)
+            # parse_mode явный: уведомления могут уходить из вспомогательных
+            # скриптов, где у Bot нет HTML-дефолта
+            await bot.send_message(chat_id, text, parse_mode="HTML",
+                                   link_preview_options={"is_disabled": True},
+                                   reply_markup=markup)
         except Exception:  # noqa: BLE001 — один недоступный чат не роняет рассылку
             log.warning("Не доставил уведомление chat_id=%s (product %s)", chat_id, product.sku)
 
