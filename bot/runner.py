@@ -36,6 +36,10 @@ def _chart_keyboard(product_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def _escape_html(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 async def _notify_subscribers(bot: Bot, product: db.Product, text: str,
                               with_chart_button: bool = False) -> None:
     markup = _chart_keyboard(product.id) if with_chart_button else None
@@ -50,6 +54,30 @@ async def check_product(bot: Bot, product: db.Product) -> str:
     """Проверить один товар: записать точку, уведомить подписчиков о снижении."""
     parser = get_parser()
     result = await parser.fetch_prices(product.url)
+
+    if result.out_of_stock:
+        was_out = db.is_out(product.id)
+        db.set_out(product.id, True)
+        db.reset_fail(product.id)
+        if not was_out:
+            title = (product.title or product.display_url).strip()
+            await _notify_subscribers(
+                bot, product,
+                f"🚫 Товар закончился:\n<b>{_escape_html(title)}</b>\nНапишу, когда появится снова.",
+                with_chart_button=False,
+            )
+        return "out"
+
+    # товар снова в наличии — сообщаем один раз и возвращаем флаг
+    if result.ok and db.is_out(product.id):
+        db.set_out(product.id, False)
+        title = (product.title or product.display_url).strip()
+        eff = notifier.effective_price(result.price, result.card_price)
+        price_str = f" Цена: {eff:,} ₽".replace(",", " ") if eff else ""
+        await _notify_subscribers(
+            bot, product,
+            f"✅ Товар снова в наличии!{_escape_html(price_str)}\n<b>{_escape_html(title)}</b>\n{product.display_url}",
+        )
 
     if result.blocked:
         fails = db.increment_fail(product.id)
@@ -104,7 +132,7 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
             if not products:
                 return "Список товаров пуст — кинь мне ссылку на товар Ozon, чтобы добавить."
 
-            stats = {"ok": 0, "drop": 0, "blocked": 0, "error": 0}
+            stats = {"ok": 0, "drop": 0, "blocked": 0, "error": 0, "out": 0}
             for i, product in enumerate(products):
                 try:
                     status = await check_product(bot, product)
@@ -119,6 +147,7 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
                 f"✅ Проверено {len(products)}: "
                 f"снизились {stats.get('drop', 0)}, "
                 f"без изменений {stats.get('ok', 0)}, "
+                f"закончились {stats.get('out', 0)}, "
                 f"антибот {stats.get('blocked', 0)}, "
                 f"ошибки {stats.get('error', 0)}"
             )

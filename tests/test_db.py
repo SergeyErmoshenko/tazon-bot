@@ -108,3 +108,12 @@ def test_same_sku_different_stores(db):
     assert db.get_by_store_sku("ozon", 777777).id == o.id
     assert db.get_by_store_sku("goldapple", 777777).id == g.id
     assert o.store == "ozon" and g.store == "goldapple"
+
+
+def test_out_of_stock_flag(db):
+    p = db.add_product("ozon", "u", 9, None)
+    assert db.is_out(p.id) is False
+    db.set_out(p.id, True)
+    assert db.is_out(p.id) is True
+    db.set_out(p.id, False)
+    assert db.is_out(p.id) is False

@@ -32,6 +32,7 @@ async def main(argv: list[str]) -> int:
         await parser.close()
 
     print(f"ok       : {result.ok}")
+    print(f"out      : {result.out_of_stock}")
     print(f"blocked  : {result.blocked}")
     print(f"error    : {result.error}")
     print(f"title    : {result.title}")

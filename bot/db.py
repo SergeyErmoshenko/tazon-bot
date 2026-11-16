@@ -60,7 +60,8 @@ class Product:
     fail_count: int
     added_at: str
     orig_url: str | None = None  # ссылка, которой товар добавили (с реферальными хвостами)
-    store: str = "ozon"          # 'ozon' | 'goldapple'
+    store: str = "ozon"          # 'ozon' | 'goldapple' | 'wildberries'
+    is_out: bool = False         # True = товар закончился (уведомляли один раз)
 
     @property
     def display_url(self) -> str:
@@ -94,6 +95,11 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass  # колонка уже есть
         conn.execute("UPDATE products SET orig_url = url WHERE orig_url IS NULL")
+        # миграция под out-of-stock: флаг «товар закончился»
+        try:
+            conn.execute("ALTER TABLE products ADD COLUMN is_out INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # колонка уже есть
         # миграция под мультисторовость: UNIQUE(sku) -> UNIQUE(store, sku).
         # SQLite не умеет DROP CONSTRAINT — пересоздаём таблицу.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(products)")}
@@ -134,6 +140,7 @@ def _row_to_product(row: sqlite3.Row) -> Product:
         added_at=row["added_at"],
         orig_url=row["orig_url"],
         store=row["store"],
+        is_out=bool(row["is_out"]),
     )
 
 
@@ -310,6 +317,18 @@ def reset_fail(product_id: int) -> None:
 def update_title(product_id: int, title: str) -> None:
     with _connect() as conn:
         conn.execute("UPDATE products SET title = ? WHERE id = ?", (title, product_id))
+
+
+def set_out(product_id: int, is_out: bool) -> None:
+    """Пометить/снять «товар закончился» (для уведомления один раз)."""
+    with _connect() as conn:
+        conn.execute("UPDATE products SET is_out = ? WHERE id = ?", (1 if is_out else 0, product_id))
+
+
+def is_out(product_id: int) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT is_out FROM products WHERE id = ?", (product_id,)).fetchone()
+        return bool(row["is_out"]) if row else False
 
 
 def backfill_subscriptions(default_chat_id: int) -> int:

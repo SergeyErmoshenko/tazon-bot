@@ -286,6 +286,7 @@ class FetchResult:
     card_price: int | None = None
     title: str | None = None
     blocked: bool = False          # антибот не пустил (цен нет)
+    out_of_stock: bool = False     # товар закончился (редирект на поиск)
     error: str | None = None       # прочая ошибка (таймаут и т.п.)
 
     @property
@@ -488,6 +489,14 @@ class OzonParser:
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
 
+            # Кончившийся товар Ozon редиректит на поиск (?...product_id=<sku>)
+            # со страницей «Товар закончился»; на ней виджеты «похожих
+            # товаров» с чужими ценами — детектим ДО экстрактора
+            final_url = page.url
+            if "/search/" in final_url and "product_id=" in final_url:
+                log.info("Товар закончился (redirect на поиск): %s", url)
+                return FetchResult(url=url, out_of_stock=True)
+
             # Статус/титул могут быть от челленджа, но страница рендерится:
             # сначала ждём ЦЕНУ, и только её отсутствие считаем блоком.
             plain = card = None
@@ -514,6 +523,9 @@ class OzonParser:
                 html = await page.content()
             except Exception:  # noqa: BLE001
                 pass
+            if "товар закончился" in html.lower():
+                log.info("Товар закончился (маркер на странице): %s", url)
+                return FetchResult(url=url, out_of_stock=True)
             if looks_like_block(title, html):
                 log.warning("Антибот-блок (title=%r): %s", title, url)
                 return FetchResult(url=url, blocked=True)
