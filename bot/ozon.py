@@ -310,18 +310,26 @@ class OzonParser:
     общий профиль, свежий посетитель челлендж проходит.
     """
 
-    def __init__(self, cdp_port: int | None = None, profile_dir: Path | None = None) -> None:
+    def __init__(self, cdp_port: int | None = None, profile_dir: Path | None = None,
+                 max_concurrency: int = 3) -> None:
         self._port = cdp_port or config.CDP_PORT
         self._profile_dir = profile_dir or config.BROWSER_PROFILE_DIR
         self._playwright = None
         self._browser = None
         self._context = None
         self._proc: subprocess.Popen | None = None
-        self._lock = asyncio.Lock()
+        self._start_lock = asyncio.Lock()          # Chrome поднимает один
+        self._sem = asyncio.Semaphore(max_concurrency)  # N параллельных вкладок
 
     async def start(self) -> None:
         if self._context is not None:
             return
+        async with self._start_lock:
+            if self._context is not None:
+                return
+            await self._start()
+
+    async def _start(self) -> None:
         from playwright.async_api import async_playwright
 
         self._profile_dir.mkdir(parents=True, exist_ok=True)
@@ -407,7 +415,7 @@ class OzonParser:
             fetch = self._fetch_wildberries
         else:
             fetch = self._fetch_ozon
-        async with self._lock:
+        async with self._sem:
             last: FetchResult | None = None
             for attempt in range(1, config.MAX_RETRIES + 1):
                 try:
@@ -650,7 +658,7 @@ class OzonParser:
         открываем её в Chrome, ждём, пока URL станет карточкой товара,
         и нормализуем финальный адрес. None — не дождались.
         """
-        async with self._lock:
+        async with self._sem:
             try:
                 await self.start()
                 page = await self._new_page()
@@ -678,7 +686,7 @@ class OzonParser:
         Вызывается при добавлении товара, если основной прогон не дождался
         заголовка: свежая навигация по карточке почти всегда его отдаёт.
         """
-        async with self._lock:
+        async with self._sem:
             try:
                 page = await self._new_page()
                 try:

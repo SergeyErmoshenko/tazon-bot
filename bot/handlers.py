@@ -139,7 +139,7 @@ async def cmd_check(message: Message, bot: Bot) -> None:
     if not products:
         await message.answer("Твой список пуст — добавь сначала товары.")
         return
-    est = int(len(products) * (sum(config.DELAY_BETWEEN_PRODUCTS) / 2 + 8) / 60) + 1
+    est = int(len(products) * 10 / config.PRODUCT_CONCURRENCY / 60) + 1
     try:
         await message.answer(f"Проверяю {len(products)} товаров, это займёт ~{est} мин. При снижении напишу.")
     except TelegramNetworkError:

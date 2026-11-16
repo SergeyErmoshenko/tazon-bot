@@ -28,9 +28,10 @@ def get_parser(store: str = "ozon") -> OzonParser:
     остальные — через общий."""
     if store not in _parsers:
         if store == "goldapple":
-            _parsers[store] = OzonParser(cdp_port=config.GA_CDP_PORT, profile_dir=config.GA_PROFILE_DIR)
+            _parsers[store] = OzonParser(cdp_port=config.GA_CDP_PORT, profile_dir=config.GA_PROFILE_DIR,
+                                         max_concurrency=config.GA_PRODUCT_CONCURRENCY)
         else:
-            _parsers[store] = OzonParser()
+            _parsers[store] = OzonParser(max_concurrency=config.PRODUCT_CONCURRENCY)
     return _parsers[store]
 
 
@@ -151,15 +152,20 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
                 return "Список товаров пуст — кинь мне ссылку на товар Ozon, чтобы добавить."
 
             stats = {"ok": 0, "drop": 0, "blocked": 0, "error": 0, "out": 0}
-            for i, product in enumerate(products):
+
+            async def check_one(idx: int, product: db.Product) -> None:
+                # разброс старта, чтобы запросы не начинались одновременно
+                await asyncio.sleep(idx * config.PRODUCT_STAGGER)
                 try:
                     status = await check_product(bot, product)
                 except Exception:  # noqa: BLE001 — один товар не должен ронять прогон
                     log.exception("Прогон по товару %s упал", product.url)
                     status = "error"
                 stats[status] = stats.get(status, 0) + 1
-                if i < len(products) - 1:
-                    await asyncio.sleep(random.uniform(*config.DELAY_BETWEEN_PRODUCTS))
+
+            # параллельные вкладки Chrome: лимит параллельности держит
+            # семафор парсера (3 для Ozon/WB, 2 для ЗЯ)
+            await asyncio.gather(*(check_one(i, p) for i, p in enumerate(products)))
 
             summary = (
                 f"✅ Проверено {len(products)}: "

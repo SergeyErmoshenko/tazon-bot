@@ -31,6 +31,14 @@ CDP_PORT = int(os.getenv("CDP_PORT", "9222"))
 GA_CDP_PORT = int(os.getenv("GA_CDP_PORT", "9333"))
 GA_PROFILE_DIR = DATA_DIR / "ga-profile"
 
+# Параллельные вкладки Chrome при прогоне (больше = быстрее, но антибот
+# магазинов не любит шквал одновременных запросов с одного профиля)
+PRODUCT_CONCURRENCY = int(os.getenv("PRODUCT_CONCURRENCY", "3"))
+# ЗЯ капризнее — ей меньше
+GA_PRODUCT_CONCURRENCY = int(os.getenv("GA_PRODUCT_CONCURRENCY", "2"))
+# Разброс старта задач, сек (чтобы запросы не начинались одновременно)
+PRODUCT_STAGGER = float(os.getenv("PRODUCT_STAGGER", "0.8"))
+
 # --- Парсер: задержки и ретраи ---
 PAGE_TIMEOUT_MS = 30_000          # навигация по карточке
 PRICE_TIMEOUT_MS = 15_000         # ожидание виджета цены на загруженной странице
