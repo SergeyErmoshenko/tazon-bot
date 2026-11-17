@@ -66,30 +66,43 @@ async def cmd_list(message: Message) -> None:
         await message.answer("Твой список пуст. Кинь мне ссылку на товар Ozon — добавлю.")
         return
 
+    # группировка по магазинам: у каждого своя секция с независимой нумерацией
+    STORE_HEADERS = {"ozon": "🟦 Ozon", "goldapple": "🍏 Золотое Яблоко", "wildberries": "🟪 Wildberries"}
+    by_store: dict[str, list[db.Product]] = {}
+    for p in products:
+        by_store.setdefault(p.store, []).append(p)
+
     rows: list[str] = []
     buttons: list[list[InlineKeyboardButton]] = []
-    for i, p in enumerate(products, 1):
-        last = db.get_last_point(p.id)
-        first = db.get_first_point(p.id)
-        title = (p.title or "⏳ название уточню при следующей проверке")
-        if len(title) > 120:
-            title = title[:120] + "…"
-        price_str = "—"
-        if last:
-            eff = effective_price(last.price, last.card_price)
-            if eff is not None:
-                suffix = " с картой" if last.card_price and p.store == "ozon" else (" в клубе" if last.card_price else "")
-                price_str = f"{eff:,} ₽".replace(",", " ") + suffix
-        delta = ""
-        if last and first and last.price and first.price and last.price != first.price:
-            d = last.price - first.price
-            sign = "+" if d > 0 else ""
-            delta = f" ({sign}{d:,} ₽ к первой)".replace(",", " ")
-        rows.append(f"{i}. {title} — {price_str}{delta}\n   ссылка: {p.display_url}")
-        buttons.append([InlineKeyboardButton(text=f"📈 {i}. {title[:40]}", callback_data=f"chart:{p.id}")])
+    num = 0
+    for store in ("ozon", "goldapple", "wildberries"):
+        group = by_store.get(store)
+        if not group:
+            continue
+        rows.append(f"\n{STORE_HEADERS.get(store, store)}:")
+        for p in group:
+            num += 1
+            last = db.get_last_point(p.id)
+            first = db.get_first_point(p.id)
+            title = (p.title or "⏳ название уточню при следующей проверке")
+            if len(title) > 120:
+                title = title[:120] + "…"
+            price_str = "—"
+            if last:
+                eff = effective_price(last.price, last.card_price)
+                if eff is not None:
+                    suffix = " с картой" if last.card_price and p.store == "ozon" else (" в клубе" if last.card_price else "")
+                    price_str = f"{eff:,} ₽".replace(",", " ") + suffix
+            delta = ""
+            if last and first and last.price and first.price and last.price != first.price:
+                d = last.price - first.price
+                sign = "+" if d > 0 else ""
+                delta = f" ({sign}{d:,} ₽ к первой)".replace(",", " ")
+            rows.append(f"{num}. {title} — {price_str}{delta}\n   ссылка: {p.display_url}")
+            buttons.append([InlineKeyboardButton(text=f"📈 {num}. {title[:40]}", callback_data=f"chart:{p.id}")])
 
     await message.answer(
-        "Твои товары:\n" + "\n".join(rows) + "\n\nКнопка — график:",
+        "Твои товары:\n" + "\n".join(rows).lstrip() + "\n\nКнопка — график:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         disable_web_page_preview=True,
     )
