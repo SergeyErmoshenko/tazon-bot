@@ -33,7 +33,8 @@ DUMP_JS = """
     const p = el.closest('div');
     if (p && p.previousElementSibling) sib = (p.previousElementSibling.textContent || '').trim().slice(0, 40);
     if (!sib && p && p.nextElementSibling) sib = 'next: ' + (p.nextElementSibling.textContent || '').trim().slice(0, 40);
-    out.push({v: v, struck: struck, sib: sib});
+    const cls2 = String(el.className || '');
+    out.push({v: v, struck: struck, sib: sib, pterm: cls2.includes('price-term')});
     if (out.length >= 12) break;
   }
   return out;
@@ -68,7 +69,7 @@ async def main() -> None:
         await page.goto(URL, wait_until="domcontentloaded", timeout=60_000)
         await asyncio.sleep(8)
         for n in await page.evaluate(DUMP_JS):
-            lines.append(f"{n['v']:>6} struck={n['struck']} near={n['sib']!r}")
+            lines.append(f"{n['v']:>6} struck={n['struck']} pterm={n['pterm']} near={n['sib']!r}")
     except Exception as e:
         lines.append(f"FAIL: {type(e).__name__}: {e}")
     finally:

@@ -286,34 +286,38 @@ _WB_PRICE_JS = """
 """
 
 
-# JS для Яндекс Маркета: главный ценовой блок — первые ds-valueLine в DOM
-# (обычно дублем desktop/mobile). Дальше по DOM идут ПОДПИСКИ («Яндекс Плюс
-# на 12 месяцев…»), кэшбэк-баллы и карусели чужих цен — их отсекаем по
-# признаку: длинный текстовый сосед (>15 симв., без ₽) = не главный блок.
+# JS для Яндекс Маркета. Главный ценовой блок узнаётся по СОСЕДЯМ:
+#  - следующий сосед главной цены = «5 000 ₽ –71%» (старая + скидка) →
+#    главная = этот элемент, обычная = число из соседа;
+#  - предыдущий сосед обычной цены заканчивается на «Пэй» → главная = prev.
+# Всё остальное (подписки, кэшбэк, карусели) игнорируется — возврат после
+# первого найденного главного блока.
 _YAM_PRICE_JS = """
 () => {
-  const vals = [];
-  const seen = new Set();
-  for (const el of document.querySelectorAll('[class*="ds-valueLine"], [data-auto="priceValue"]')) {
-    const text = (el.textContent || '').trim();
-    const m = text.match(/^(\\d[\\d\\u00a0\\u202f\\u2009\\u2006 ]{0,10})\\s*₽$/);
-    if (!m) continue;
-    const p = el.closest('div');
-    let sib = '';
-    if (p && p.previousElementSibling) sib = (p.previousElementSibling.textContent || '').trim();
-    if (!sib && p && p.nextElementSibling) sib = (p.nextElementSibling.textContent || '').trim();
-    if (sib.length > 15 && !sib.includes('₽')) break;  // подписка/баллы/карусель
-    let struck = false, el2 = el;
-    while (el2) {
-      const cs = getComputedStyle(el2);
-      if (String(cs.textDecorationLine || '').includes('line-through')) { struck = true; break; }
-      el2 = el2.parentElement;
+  const parse = (t) => {
+    const m = (t || '').replace(/\\u2006|\\u00a0|\\u202f/g, ' ').match(/^(\\d[\\d ]{0,10})\\s*₽/);
+    return m ? parseInt(m[1].replace(/ /g, ''), 10) : null;
+  };
+  const els = document.querySelectorAll('[class*="ds-valueLine"], [data-auto="priceValue"]');
+  for (const el of els) {
+    const t = (el.textContent || '').trim();
+    const v = parse(t);
+    if (!v) continue;
+    const p = el.closest('div') || el;
+    const prev = p.previousElementSibling ? (p.previousElementSibling.textContent || '').trim() : '';
+    const next = p.nextElementSibling ? (p.nextElementSibling.textContent || '').trim() : '';
+    if (next && /^\\d[\\d\\u00a0\\u2006 ]{0,10}₽\\s*[–-]\\s*\\d+%/.test(next)) {
+      return {main: v, plain: parse(next)};
     }
-    const v = parseInt(m[1].replace(/[\\u00a0\\u202f\\u2009\\u2006 ]/g, ''), 10);
-    if (v >= 10 && !seen.has(v)) { seen.add(v); vals.push({v: v, struck: struck}); }
-    if (vals.length >= 4) break;
+    if (prev && prev.includes('Пэй') && prev.includes('₽')) {
+      return {main: parse(prev), plain: v};
+    }
   }
-  return vals;
+  for (const el of els) {
+    const v = parse((el.textContent || '').trim());
+    if (v) return {main: v, plain: null};  // без скидок: первая цена = главная
+  }
+  return null;
 }
 """
 
@@ -528,9 +532,8 @@ class OzonParser:
                 title = await page.title()
                 return FetchResult(url=url, error=f"цена не найдена (title={title[:60]!r})")
 
-            live = [d["v"] for d in data if not d["struck"]]
-            card = min(live) if live else None       # «с Яндекс Пэй» — минимальная
-            plain = max(live) if len(live) > 1 else None
+            card = data.get("main")
+            plain = data.get("plain")
             return FetchResult(url=url, price=plain, card_price=card,
                                title=await self._product_title(page))
         finally:
