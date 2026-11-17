@@ -70,6 +70,24 @@ def test_normalize_url_wb_short():
 def test_normalize_url_wb_rejects_search_page():
     # search.aspx — не карточка
     assert normalize_url("https://www.wildberries.ru/catalog/0/search.aspx?search=наушники") is None
+
+
+def test_normalize_url_yam_card():
+    url = "https://market.yandex.ru/card/naushniki-ergolux-elx-bthp01-chernye-15355/6041984286"
+    store, canon, sku = normalize_url(url)
+    assert store == "yandex"
+    assert sku == 6041984286
+    assert "market.yandex.ru/card/" in canon and canon.endswith("6041984286")
+
+
+def test_normalize_url_yam_old_product():
+    store, canon, sku = normalize_url("https://market.yandex.ru/product--naushniki-airpods/101715078294?sku=...")
+    assert store == "yandex" and sku == 101715078294
+
+
+def test_normalize_url_yam_rejects_category():
+    assert normalize_url("https://market.yandex.ru/category/naushniki") is None
+    assert normalize_url("https://market.yandex.ru/search?text=x") is None
     url = "https://goldapple.ru/19000007126-skin-guardian"
     assert normalize_url(url) == ("goldapple", "https://goldapple.ru/19000007126-skin-guardian", 19000007126)  # слаг обязателен
 

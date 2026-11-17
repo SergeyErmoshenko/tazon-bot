@@ -67,7 +67,8 @@ async def cmd_list(message: Message) -> None:
         return
 
     # группировка по магазинам: у каждого своя секция с независимой нумерацией
-    STORE_HEADERS = {"ozon": "🟦 Ozon", "goldapple": "🍏 Золотое Яблоко", "wildberries": "🟪 Wildberries"}
+    STORE_HEADERS = {"ozon": "🟦 Ozon", "goldapple": "🍏 Золотое Яблоко",
+                     "wildberries": "🟪 Wildberries", "yandex": "🟨 Яндекс Маркет"}
     by_store: dict[str, list[db.Product]] = {}
     for p in products:
         by_store.setdefault(p.store, []).append(p)
@@ -75,7 +76,7 @@ async def cmd_list(message: Message) -> None:
     rows: list[str] = []
     buttons: list[list[InlineKeyboardButton]] = []
     num = 0
-    for store in ("ozon", "goldapple", "wildberries"):
+    for store in ("ozon", "goldapple", "wildberries", "yandex"):
         group = by_store.get(store)
         if not group:
             continue
@@ -278,6 +279,8 @@ def _price_suffix(store: str, card_price: int | None) -> str:
         return " в клубе"
     if store == "wildberries":
         return " с WB Кошельком"
+    if store == "yandex":
+        return " с Яндекс Пэй"
     return ""
 
 def setup_router() -> Router:

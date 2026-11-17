@@ -69,7 +69,7 @@ def make_chart(product: Product, points: list[PricePoint]) -> bytes:
         else:
             ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
     card_suffix_by_store = {"ozon": "  (с Ozon Картой)", "goldapple": "  (в клубе)",
-                            "wildberries": "  (с WB Кошельком)"}
+                            "wildberries": "  (с WB Кошельком)", "yandex": "  (с Яндекс Пэй)"}
     card_suffix = card_suffix_by_store.get(product.store, "") if has_card else ""
     ax.set_ylabel("₽" + card_suffix)
     ax.grid(True, alpha=0.25, linewidth=0.6)

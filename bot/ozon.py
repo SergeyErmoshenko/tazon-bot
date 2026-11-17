@@ -51,6 +51,11 @@ _WB_CATALOG_RE = re.compile(
     r"(?:www\.)?(?:wildberries|wb)\.ru/catalog/(\d{5,})", re.IGNORECASE
 )
 _WB_SHORT_RE = re.compile(r"(?:https?://)?(?:www\.)?wb\.ru/(\d{5,})(?:[/?#]|$)", re.IGNORECASE)
+# Яндекс Маркет: market.yandex.ru/card/<slug>/<id> и старый product--<slug>/<id>
+_YAM_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?market\.yandex\.ru/(?:card|product--[^/]+)/(?:[^/]*?/)?(\d{6,15})(?:[/?#]|$)",
+    re.IGNORECASE,
+)
 
 # Число с разделителями разрядов (пробел, узкий пробел, nbsp) и знаком рубля
 _PRICE_IN_TEXT_RE = re.compile(r"(\d[\d   \s]{0,15})\s*₽")
@@ -87,6 +92,11 @@ def normalize_url(raw: str) -> tuple[str, str, int] | None:
     Короткие редиректы (ozon.ru/t/<hash>) через регэксп не решаются — их
     разворачивает OzonParser.resolve.
     """
+    m = _YAM_URL_RE.search(raw)
+    if m:
+        sku = int(m.group(1))
+        token = m.group(0).split("market.yandex.ru/", 1)[1].rstrip("/?#")
+        return "yandex", f"https://market.yandex.ru/{token}", sku
     m = _WB_CATALOG_RE.search(raw)
     if m:
         sku = int(m.group(1))
@@ -276,6 +286,38 @@ _WB_PRICE_JS = """
 """
 
 
+# JS для Яндекс Маркета: главный ценовой блок — первые ds-valueLine в DOM
+# (обычно дублем desktop/mobile). Дальше по DOM идут ПОДПИСКИ («Яндекс Плюс
+# на 12 месяцев…»), кэшбэк-баллы и карусели чужих цен — их отсекаем по
+# признаку: длинный текстовый сосед (>15 симв., без ₽) = не главный блок.
+_YAM_PRICE_JS = """
+() => {
+  const vals = [];
+  const seen = new Set();
+  for (const el of document.querySelectorAll('[class*="ds-valueLine"], [data-auto="priceValue"]')) {
+    const text = (el.textContent || '').trim();
+    const m = text.match(/^(\\d[\\d\\u00a0\\u202f\\u2009\\u2006 ]{0,10})\\s*₽$/);
+    if (!m) continue;
+    const p = el.closest('div');
+    let sib = '';
+    if (p && p.previousElementSibling) sib = (p.previousElementSibling.textContent || '').trim();
+    if (!sib && p && p.nextElementSibling) sib = (p.nextElementSibling.textContent || '').trim();
+    if (sib.length > 15 && !sib.includes('₽')) break;  // подписка/баллы/карусель
+    let struck = false, el2 = el;
+    while (el2) {
+      const cs = getComputedStyle(el2);
+      if (String(cs.textDecorationLine || '').includes('line-through')) { struck = true; break; }
+      el2 = el2.parentElement;
+    }
+    const v = parseInt(m[1].replace(/[\\u00a0\\u202f\\u2009\\u2006 ]/g, ''), 10);
+    if (v >= 10 && !seen.has(v)) { seen.add(v); vals.push({v: v, struck: struck}); }
+    if (vals.length >= 4) break;
+  }
+  return vals;
+}
+"""
+
+
 # ---------------------------------------------------------------------------
 # Браузер: обычный Chrome + Playwright over CDP
 # ---------------------------------------------------------------------------
@@ -414,6 +456,8 @@ class OzonParser:
             fetch = self._fetch_goldapple
         elif "wildberries.ru" in url.lower() or "//wb.ru" in url.lower():
             fetch = self._fetch_wildberries
+        elif "market.yandex.ru" in url.lower():
+            fetch = self._fetch_yandex
         else:
             fetch = self._fetch_ozon
         last: FetchResult | None = None
@@ -451,7 +495,49 @@ class OzonParser:
             return await self._fetch_goldapple(url)
         if "wildberries.ru" in url.lower() or "//wb.ru" in url.lower():
             return await self._fetch_wildberries(url)
+        if "market.yandex.ru" in url.lower():
+            return await self._fetch_yandex(url)
         return await self._fetch_ozon(url)
+
+    async def _fetch_yandex(self, url: str) -> FetchResult:
+        """Яндекс Маркет: SmartCaptcha (куки капчи — в профиле бота, при
+        повторе бот ответит blocked), цены в ds-valueLine."""
+        page = await self._new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+
+            # SmartCaptcha Яндекса: заглушка «Вы не робот?» без цен.
+            # Куки пройденной вручную капчи живут в профиле; если словили
+            # снова — отдаём blocked (прогон не считает это ошибкой товара)
+            deadline = time.monotonic() + 15
+            data = None
+            while time.monotonic() < deadline:
+                title = (await page.title() or "").lower()
+                if "робот" in title or "robot" in title:
+                    log.warning("Яндекс SmartCaptcha: %s", url)
+                    return FetchResult(url=url, blocked=True)
+                try:
+                    data = await page.evaluate(_YAM_PRICE_JS)
+                except Exception:  # noqa: BLE001 — страница не готова
+                    data = None
+                if data:
+                    break
+                await asyncio.sleep(1.5)
+
+            if not data:
+                title = await page.title()
+                return FetchResult(url=url, error=f"цена не найдена (title={title[:60]!r})")
+
+            live = [d["v"] for d in data if not d["struck"]]
+            card = min(live) if live else None       # «с Яндекс Пэй» — минимальная
+            plain = max(live) if len(live) > 1 else None
+            return FetchResult(url=url, price=plain, card_price=card,
+                               title=await self._product_title(page))
+        finally:
+            try:
+                await page.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _fetch_wildberries(self, url: str) -> FetchResult:
         page = await self._new_page()
