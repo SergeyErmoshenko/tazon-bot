@@ -56,7 +56,18 @@ def make_chart(product: Product, points: list[PricePoint]) -> bytes:
     else:
         date_fmt = "%d.%m"
     ax.xaxis.set_major_formatter(mdates.DateFormatter(date_fmt))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
+    # AutoDateLocator не умеет короткие диапазоны (точки в минутах) — для них
+    # фиксируем деление по секундам/минутам, для остального — автолокатор
+    if times:
+        span_s = (times[-1] - times[0]).total_seconds()
+        if span_s < 1800:
+            interval = max(1, int(span_s / 6 / 30))
+            ax.xaxis.set_major_locator(mdates.SecondLocator(interval=interval))
+        elif span_s < 6 * 3600:
+            interval = max(1, int(span_s / 6 / 3600))
+            ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=interval))
+        else:
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
     card_suffix_by_store = {"ozon": "  (с Ozon Картой)", "goldapple": "  (в клубе)",
                             "wildberries": "  (с WB Кошельком)"}
     card_suffix = card_suffix_by_store.get(product.store, "") if has_card else ""

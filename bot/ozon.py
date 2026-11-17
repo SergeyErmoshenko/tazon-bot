@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import shutil
 import re
 import subprocess
 import sys
@@ -581,7 +582,11 @@ class OzonParser:
                     next_reload = time.monotonic() + 18
                 await asyncio.sleep(2)
             else:
-                log.warning("ЗЯ челлендж не пройден за 75 с: %s", url)
+                log.warning("ЗЯ челлендж не пройден за 75 с: %s — сбрасываю GA-профиль", url)
+                # профиль «спалён»: гасим Chrome и стираем профиль — следующая
+                # попытка будет от лица свежего посетителя и челлендж проходит
+                await self.close()
+                shutil.rmtree(self._profile_dir, ignore_errors=True)
                 return FetchResult(url=url, blocked=True)
 
             # 404-страница ЗЯ содержит виджеты рекомендаций с чужими ценами —
