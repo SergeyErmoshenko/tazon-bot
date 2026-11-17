@@ -496,19 +496,29 @@ class OzonParser:
                 pass
 
     async def _wb_title(self, page) -> str | None:
-        """Название WB: h1 у них — рейтинг, берём <title> до служебных хвостов."""
-        try:
-            title = (await page.title() or "").strip()
-            for marker in ("купить за", "— купить", "купить в", "/ WB", "Wildberries"):
-                idx = title.find(marker)
-                if idx > 5:
-                    title = title[:idx].strip(" —/ ")
-                    break
-            if title:
-                return title
-        except Exception:  # noqa: BLE001
-            pass
-        return await self._product_title(page)
+        """Название WB: h1 у них — рейтинг, берём <title>.
+
+        SPA выставляет настоящий title не сразу (дефолт «Интернет-магазин») —
+        ждём до 10 с, пока появится настоящее название.
+        """
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                title = (await page.title() or "").strip()
+            except Exception:  # noqa: BLE001
+                return None
+            # WB использует неразрывный дефис (U+2011) в дефолтном «Интернет‑магазин»
+            title_normalized = title.replace("‑", "-").replace("–", "-")
+            if title and "Интернет-магазин" not in title_normalized:
+                for marker in ("купить за", "— купить", "купить в", "/ WB", "Wildberries"):
+                    idx = title.find(marker)
+                    if idx > 5:
+                        title = title[:idx].strip(" —/ ")
+                        break
+                if title:
+                    return title
+            await asyncio.sleep(1)
+        return None
 
     async def _fetch_ozon(self, url: str) -> FetchResult:
         page = await self._new_page()
