@@ -366,6 +366,7 @@ class OzonParser:
         self._context = None
         self._proc: subprocess.Popen | None = None
         self._start_lock = asyncio.Lock()          # Chrome поднимает один
+        self._restart_lock = asyncio.Lock()        # перезапуск — один за раз
         self._sem = asyncio.Semaphore(max_concurrency)  # N параллельных вкладок
 
     async def start(self) -> None:
@@ -447,9 +448,24 @@ class OzonParser:
             self._proc = None
 
     async def _restart(self) -> None:
-        log.warning("Перезапуск Chrome/CDP")
-        await self.close()
-        await self.start()
+        """Восстановление после сбоя вкладки/подключения.
+
+        При параллельных вкладках Chrome ОБЩИЙ: убивать его из-за сбоя одной
+        вкладки нельзя — погибнут вкладки других товаров (и каскад
+        одновременных _restart дерётся за порт). Если CDP жив — просто
+        пересоздаём подключение; Chrome гасим только если он реально умер.
+        """
+        async with self._restart_lock:
+            if _cdp_alive(self._port):
+                log.info("CDP жив — пересоздаю подключение без перезапуска Chrome")
+                self._browser = None
+                self._context = None
+                self._playwright = None
+                await self.start()
+                return
+            log.warning("Chrome мёртв — перезапуск")
+            await self.close()
+            await self.start()
 
     async def fetch_prices(self, url: str) -> FetchResult:
         """Открыть карточку и снять цены. До MAX_RETRIES попыток.
