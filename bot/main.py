@@ -49,24 +49,31 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    await bot.set_my_commands([
-        BotCommand(command="list", description="Мой список товаров и графики"),
-        BotCommand(command="check", description="Проверить мои товары прямо сейчас"),
-        BotCommand(command="del", description="Удалить товар (или /del <ссылка>)"),
-        BotCommand(command="help", description="Как пользоваться ботом"),
-    ])
+    log.info("Бот создан")
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="list", description="Мой список товаров и графики"),
+            BotCommand(command="check", description="Проверить мои товары прямо сейчас"),
+            BotCommand(command="del", description="Удалить товар (или /del <ссылка>)"),
+            BotCommand(command="help", description="Как пользоваться ботом"),
+        ])
+        log.info("Меню команд зарегистрировано")
+    except Exception as exc:  # noqa: BLE001 — сеть моргнула: не валим старт, меню доедет в следующий раз
+        log.warning("set_my_commands не прошёл (%r) — продолжаю без меню", exc)
+
     dp = Dispatcher()
     dp.include_router(setup_router())
 
     scheduler = create_scheduler(bot)
     scheduler.start()
+    log.info("Планировщик запущен, стартую поллинг")
 
     try:
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
         scheduler.shutdown(wait=False)
-        from .runner import get_parser
-        await get_parser().close()
+        from .runner import close_parsers
+        await close_parsers()
         await bot.session.close()
 
 
