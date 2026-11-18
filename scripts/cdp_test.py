@@ -15,6 +15,16 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from playwright.async_api import async_playwright
 
+
+def kill_chrome_tree(proc):
+    """terminate() убивает только главный процесс — Chrome-дети осирают."""
+    import subprocess as sp
+    if sys.platform == "win32":
+        sp.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
+    else:
+        proc.terminate()
+
+
 CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 PROFILE = r"C:\Users\1\tazon-bot\data\browser-profile"
 PORT = 9222
@@ -42,7 +52,7 @@ async def main() -> None:
     ])
     if not wait_port():
         print("CDP-порт не поднялся за 25 c")
-        proc.terminate()
+        kill_chrome_tree(proc)
         return
 
     async with async_playwright() as p:
@@ -65,7 +75,7 @@ async def main() -> None:
         finally:
             await page.close()
             await browser.close()  # только отключаемся, Chrome живёт
-    proc.terminate()
+    kill_chrome_tree(proc)
 
 
 if __name__ == "__main__":

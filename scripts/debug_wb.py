@@ -3,6 +3,16 @@ import asyncio
 import subprocess
 import sys
 
+
+def kill_chrome_tree(proc):
+    """terminate() убивает только главный процесс — Chrome-дети осирают."""
+    import subprocess as sp
+    if sys.platform == "win32":
+        sp.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
+    else:
+        proc.terminate()
+
+
 sys.path.insert(0, r"C:\Users\1\tazon-bot")
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -79,7 +89,7 @@ async def main() -> None:
     finally:
         await page.close()
         await browser.close()
-        proc.terminate()
+        kill_chrome_tree(proc)
     for line in lines:
         print(line)
     with open(r"C:\Users\1\wb_out.txt", "w", encoding="utf-8") as f:
