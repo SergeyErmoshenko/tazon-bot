@@ -181,13 +181,33 @@ async def cb_chart(callback: CallbackQuery, bot: Bot) -> None:
     if len(history) < 2:
         await callback.answer("Пока одна точка — график будет после следующей проверки", show_alert=True)
         return
-    await callback.answer("Рисую…")
+
+    # сетевой провал не должен ронять обработчик: плашку и отправку тянем с ретраями
+    try:
+        await callback.answer("Рисую…")
+    except TelegramNetworkError:
+        pass
     png = make_chart(product, history)
-    await bot.send_photo(
-        chat_id,
-        photo=BufferedInputFile(png, filename="chart.png"),
-        caption=f"📈 {product.title or product.url}\n{len(history)} точек истории",
-    )
+
+    async def send():
+        return await bot.send_photo(
+            chat_id,
+            photo=BufferedInputFile(png, filename="chart.png"),
+            caption=f"📈 {product.title or product.url}\n{len(history)} точек истории",
+        )
+
+    for attempt in range(3):
+        try:
+            await send()
+            return
+        except TelegramNetworkError:
+            if attempt < 2:
+                await asyncio.sleep(8)
+    log.warning("График %s не отправлен — сеть недоступна 3 попытки", product_id)
+    try:
+        await callback.message.answer("Сеть была недоступна — график не отправился. Нажми кнопку ещё раз.")
+    except Exception:  # noqa: BLE001 — и это тоже может не уйти
+        pass
 
 
 @router.callback_query(F.data.startswith("del:"))
