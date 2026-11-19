@@ -117,3 +117,29 @@ def test_out_of_stock_flag(db):
     assert db.is_out(p.id) is True
     db.set_out(p.id, False)
     assert db.is_out(p.id) is False
+
+
+def test_compress_old_points(db):
+    """Старые дни схлопываются до 2 точек, свежие не трогаются."""
+    from datetime import datetime, timedelta
+    p = db.add_product("ozon", "u", 42, None)
+    old = datetime.now() - timedelta(days=30)
+    # старый день: 5 точек
+    for i in range(5):
+        db.insert_point(p.id, 1000 + i, 900 + i)
+    c = sqlite3.connect if False else None
+    # проставить старые даты напрямую
+    conn = db_module._connect()
+    conn.execute("UPDATE price_points SET checked_at = ? WHERE product_id = ?", (old.isoformat(timespec="seconds"), p.id))
+    conn.commit()
+    removed = db.compress_old_points(14)
+    assert removed == 3
+    history = db.get_history(p.id)
+    assert len(history) == 2  # первая и последняя дня
+    assert history[0].price == 1000 and history[-1].price == 1004
+    # свежие точки не трогаются
+    db.insert_point(p.id, 800, 700)  # сейчас — свежая
+    removed2 = db.compress_old_points(14)
+    assert removed2 == 0
+    assert len(db.get_history(p.id)) == 3
+

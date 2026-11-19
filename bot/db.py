@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config
 
@@ -347,3 +347,30 @@ def backfill_subscriptions(default_chat_id: int) -> int:
                 (default_chat_id, row["id"], now),
             )
         return len(orphans)
+
+
+def compress_old_points(keep_days: int) -> int:
+    """Сжатие старой истории: точки старше keep_days дней схлопываются до
+    двух в день на товар (первая и последняя) — форма дневного тренда и
+    экстремумы сохраняются, объём базы растёт O(2 точки/день).
+
+    Возвращает число удалённых точек."""
+    cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat(timespec="seconds")
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM price_points
+            WHERE checked_at < :cutoff
+              AND id NOT IN (
+                  SELECT MIN(id) FROM price_points
+                  WHERE checked_at < :cutoff
+                  GROUP BY product_id, substr(checked_at, 1, 10)
+                  UNION
+                  SELECT MAX(id) FROM price_points
+                  WHERE checked_at < :cutoff
+                  GROUP BY product_id, substr(checked_at, 1, 10)
+              )
+            """,
+            {"cutoff": cutoff},
+        )
+        return cur.rowcount

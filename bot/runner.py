@@ -207,6 +207,10 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
             return summary
         finally:
             await close_parsers()
+            # сжатие истории: старше 14 дней оставляем 2 точки в день
+            removed = db.compress_old_points(config.COMPRESS_AFTER_DAYS)
+            if removed:
+                log.info("Сжато точек истории старше %d дней: %d", config.COMPRESS_AFTER_DAYS, removed)
 
 
 async def resolve_single(raw_url: str) -> tuple[str, int] | None:

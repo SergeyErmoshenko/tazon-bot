@@ -40,6 +40,8 @@ GA_PRODUCT_CONCURRENCY = int(os.getenv("GA_PRODUCT_CONCURRENCY", "2"))
 PRODUCT_STAGGER = float(os.getenv("PRODUCT_STAGGER", "0.25"))
 # Закончившиеся товары перепроверяются раз в столько плановых прогонов
 OOS_RECHECK_EVERY = int(os.getenv("OOS_RECHECK_EVERY", "6"))
+# История старше этого количества дней сжимается до 2 точек в день
+COMPRESS_AFTER_DAYS = int(os.getenv("COMPRESS_AFTER_DAYS", "14"))
 
 # --- Парсер: задержки и ретраи ---
 PAGE_TIMEOUT_MS = 30_000          # навигация по карточке
