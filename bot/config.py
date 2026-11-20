@@ -31,9 +31,10 @@ CDP_PORT = int(os.getenv("CDP_PORT", "9222"))
 GA_CDP_PORT = int(os.getenv("GA_CDP_PORT", "9333"))
 GA_PROFILE_DIR = DATA_DIR / "ga-profile"
 
-# Параллельные вкладки Chrome при прогоне (больше = быстрее, но антибот
-# магазинов не любит шквал одновременных запросов с одного профиля)
-PRODUCT_CONCURRENCY = int(os.getenv("PRODUCT_CONCURRENCY", "4"))
+# Параллельные вкладки Chrome при прогоне. 4+ на слабом ноутбуке
+# роняет Chrome по памяти (TargetClosedError у всех сразу) — 2 безопасно.
+# Можешь поднять через .env, если машина тянет.
+PRODUCT_CONCURRENCY = int(os.getenv("PRODUCT_CONCURRENCY", "2"))
 # ЗЯ капризнее — ей меньше
 GA_PRODUCT_CONCURRENCY = int(os.getenv("GA_PRODUCT_CONCURRENCY", "2"))
 # Разброс старта задач, сек (чтобы запросы не начинались одновременно)

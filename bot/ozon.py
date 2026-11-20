@@ -392,13 +392,19 @@ class OzonParser:
                     config.CHROME_PATH,
                     f"--remote-debugging-port={port}",
                     f"--user-data-dir={self._profile_dir}",
+                    # --start-minimized в новых Chrome ненадёжен: окно уводим
+                    # за пределы экрана, чтобы оно никогда не висело видимым
                     "--start-minimized",
+                    "--window-position=-32000,-32000",
+                    # глушим всплывашку «Restore pages?» после жёстких убийств
+                    "--hide-crash-restore-bubble",
+                    "--no-first-run",
+                    "--no-default-browser-check",
                     # фоновый жор режем: без фоновой сети/синхронизации/обновлений
                     "--disable-background-networking",
                     "--disable-component-update",
                     "--disable-sync",
                     "--mute-audio",
-                    "--no-first-run",
                     "about:blank",
                 ],
                 creationflags=creationflags,
@@ -457,7 +463,15 @@ class OzonParser:
         """
         async with self._restart_lock:
             if _cdp_alive(self._port):
+                # Chrome общий и жив — гасим ТОЛЬКО playwright-подключение
+                # (stop() завершает драйвер-процесс node; без этого драйверы
+                # осирают и копятся). Chrome продолжает работать.
                 log.info("CDP жив — пересоздаю подключение без перезапуска Chrome")
+                if self._playwright is not None:
+                    try:
+                        await self._playwright.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._browser = None
                 self._context = None
                 self._playwright = None
