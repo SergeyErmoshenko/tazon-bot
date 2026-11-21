@@ -429,7 +429,16 @@ class OzonParser:
         log.info("Подключён к Chrome по CDP (порт %d)", port)
 
     async def close(self) -> None:
-        for obj, name in ((self._browser, "browser"), (self._playwright, "playwright")):
+        # 1) ГРАЦИОЗНОЕ закрытие: Browser.close по CDP — Chrome выходит сам,
+        #    без диалогов «unknown software exception 0xe0000008», которые
+        #    выдают дочерние процессы при taskkill /F посреди работы
+        if self._browser is not None:
+            try:
+                session = await self._browser.new_browser_cdp_session()
+                await session.send("Browser.close")
+            except Exception:  # noqa: BLE001 — соединение могло уже умереть
+                pass
+        for obj in (self._browser, self._playwright):
             if obj is not None:
                 try:
                     await obj.close()
@@ -438,17 +447,23 @@ class OzonParser:
         self._browser = None
         self._context = None
         self._playwright = None
+        # 2) запасной путь: не closed за 4 с — глушим дерево принудительно
         if self._proc is not None:
             try:
-                if sys.platform == "win32":
-                    # terminate() убивает только главный процесс; Chrome-дети
-                    # (renderer/GPU) могут осиротеть — глушим всё дерево
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(self._proc.pid)],
-                        capture_output=True, check=False,
-                    )
-                else:
-                    self._proc.terminate()
+                for _ in range(8):
+                    if self._proc.poll() is not None:
+                        break
+                    await asyncio.sleep(0.5)
+                if self._proc.poll() is None:
+                    if sys.platform == "win32":
+                        # terminate() убивает только главный процесс; Chrome-дети
+                        # (renderer/GPU) могут осиротеть — глушим всё дерево
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(self._proc.pid)],
+                            capture_output=True, check=False,
+                        )
+                    else:
+                        self._proc.terminate()
             except Exception:  # noqa: BLE001
                 pass
             self._proc = None
