@@ -471,14 +471,26 @@ class OzonParser:
     async def _restart(self) -> None:
         """Восстановление после сбоя вкладки/подключения.
 
-        При параллельных вкладках Chrome ОБЩИЙ: убивать его из-за сбоя одной
-        вкладки нельзя — погибнут вкладки других товаров (и каскад
-        одновременных _restart дерётся за порт). Если CDP жив — просто
-        пересоздаём подключение; Chrome гасим только если он реально умер.
+        Chrome бывает не только мёртвым, но и ЗОМБИ: порт отвечает, websocket
+        подключается, а команды выполняться перестают (память/состояние).
+        Поэтому проверяем не «жив ли порт», а ЗДОРОВЬЕ: пробуем реальную CDP
+        команду с коротким таймаутом. Зомби или мёртв — полный перезапуск
+        (сначала грациозно, потом taskkill).
         """
         async with self._restart_lock:
-            if _cdp_alive(self._port):
-                # Chrome общий и жив — гасим ТОЛЬКО playwright-подключение
+            healthy = False
+            if _cdp_alive(self._port) and self._browser is not None:
+                try:
+                    session = await asyncio.wait_for(
+                        self._browser.new_browser_cdp_session(), timeout=5
+                    )
+                    await asyncio.wait_for(session.send("Browser.getVersion"), timeout=5)
+                    healthy = True
+                except Exception:  # noqa: BLE001 — зомби: подключается, но не работает
+                    healthy = False
+
+            if healthy:
+                # Chrome жив и здоров — гасим только playwright-подключение
                 # (stop() завершает драйвер-процесс node; без этого драйверы
                 # осирают и копятся). Chrome продолжает работать.
                 log.info("CDP жив — пересоздаю подключение без перезапуска Chrome")
@@ -492,7 +504,7 @@ class OzonParser:
                 self._playwright = None
                 await self.start()
                 return
-            log.warning("Chrome мёртв — перезапуск")
+            log.warning("Chrome зомби/мёртв — полный перезапуск")
             await self.close()
             await self.start()
 
