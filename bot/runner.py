@@ -40,6 +40,27 @@ async def close_parsers() -> None:
     """Погасить все Chrome-инстансы (в конце прогона)."""
     for parser in _parsers.values():
         await parser.close()
+    await _janitor_kill_stray_chrome()
+
+
+async def _janitor_kill_stray_chrome() -> None:
+    """Страховка от осиротевших Chrome бота (например, после жёсткого краша
+    процесса): добиваем все chrome.exe, чей user-data-dir принадлежит боту.
+    Chrome владельца (со своим профилем) не трогается."""
+    import subprocess as sp
+
+    ps = (
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+        "Where-Object { $_.CommandLine -like '*tazon-bot*' } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+    try:
+        await asyncio.to_thread(
+            sp.run, ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True, check=False,
+        )
+    except Exception:  # noqa: BLE001 — janitor не должен падать
+        pass
 
 
 def _escape_html(s: str) -> str:
