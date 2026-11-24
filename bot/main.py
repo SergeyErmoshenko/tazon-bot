@@ -65,6 +65,11 @@ async def main() -> None:
     dp.include_router(setup_router())
 
     scheduler = create_scheduler(bot)
+    # janitor каждые 15 мин: подчистить осиротевшие Chrome бота
+    from .runner import janitor_tick
+    scheduler.add_job(janitor_tick, "interval", minutes=15, id="janitor",
+                      max_instances=1, coalesce=True)
+    await janitor_tick()  # и сразу почистить наследие прошлого сеанса
     scheduler.start()
     log.info("Планировщик запущен, стартую поллинг")
 

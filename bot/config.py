@@ -43,6 +43,10 @@ PRODUCT_STAGGER = float(os.getenv("PRODUCT_STAGGER", "0.25"))
 OOS_RECHECK_EVERY = int(os.getenv("OOS_RECHECK_EVERY", "6"))
 # История старше этого количества дней сжимается до 2 точек в день
 COMPRESS_AFTER_DAYS = int(os.getenv("COMPRESS_AFTER_DAYS", "14"))
+# Страховочный таймаут на проверку ОДНОГО товара (сек): что бы ни зависло
+# внутри (evaluate/goto на зомби-странице), через это время товар
+# помечается ошибкой, Chrome перезапускается, прогон продолжается
+PER_PRODUCT_TIMEOUT_S = int(os.getenv("PER_PRODUCT_TIMEOUT_S", "180"))
 
 # --- Парсер: задержки и ретраи ---
 PAGE_TIMEOUT_MS = 30_000          # навигация по карточке

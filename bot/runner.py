@@ -63,6 +63,13 @@ async def _janitor_kill_stray_chrome() -> None:
         pass
 
 
+async def janitor_tick() -> None:
+    """Периодическая чистка: пропускается, пока идёт прогон (_run_lock)."""
+    if _run_lock.locked():
+        return
+    await _janitor_kill_stray_chrome()
+
+
 def _escape_html(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -203,7 +210,19 @@ async def run_check_all(bot: Bot, chat_id: int | None = None) -> str:
                 # разброс старта, чтобы запросы не начинались одновременно
                 await asyncio.sleep(idx * config.PRODUCT_STAGGER)
                 try:
-                    status = await check_product(bot, product)
+                    # страховка от вечного зависания (зомби-страница может
+                    # подвесить evaluate/goto без таймаута)
+                    status = await asyncio.wait_for(
+                        check_product(bot, product), timeout=config.PER_PRODUCT_TIMEOUT_S
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("Товар %s завис >%d с — помечен ошибкой, Chrome на принудительный рестарт",
+                                product.url, config.PER_PRODUCT_TIMEOUT_S)
+                    try:
+                        await get_parser(product.store).close()  # гасит Chrome полностью
+                    except Exception:  # noqa: BLE001
+                        pass
+                    status = "error"
                 except Exception:  # noqa: BLE001 — один товар не должен ронять прогон
                     log.exception("Прогон по товару %s упал", product.url)
                     status = "error"
