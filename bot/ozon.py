@@ -396,6 +396,12 @@ class OzonParser:
                     # за пределы экрана, чтобы оно никогда не висело видимым
                     "--start-minimized",
                     "--window-position=-32000,-32000",
+                    # КРИТИЧНО для off-screen окна: иначе Chrome считает окно
+                    # невидимым (occlusion), ЗАМОРАЖИВАЕТ рендеринг вкладок →
+                    # страницы «висят», цены не рендерятся, Chrome «not
+                    # responding»
+                    "--disable-features=CalculateNativeWinOcclusion",
+                    "--disable-gpu",
                     # глушим всплывашку «Restore pages?» после жёстких убийств
                     "--hide-crash-restore-bubble",
                     "--no-first-run",
